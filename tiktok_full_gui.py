@@ -205,7 +205,7 @@ def translate_text(text, target_language='en', log=None):
 
 def _openai_translate_segments(segments, target_language='en', log=None):
     """
-    Translate caption segments using OpenAI GPT-5.3 for natural,
+    Translate caption segments using OpenAI GPT-4o-mini for natural,
     context-aware translations that avoid repetition.
     
     Sends all segments as numbered lines so the model can see full context
@@ -274,7 +274,7 @@ def _openai_translate_segments(segments, target_language='en', log=None):
         user_content = numbered_text
     
     if log:
-        log(f"[OpenAI TRANSLATE] Sending {len(segments)} segments to GPT-5.3 for {lang_name} translation...")
+        log(f"[OpenAI TRANSLATE] Sending {len(segments)} segments to GPT-4o-mini for {lang_name} translation...")
         if custom:
             log(f"[OpenAI TRANSLATE] Using CUSTOM user prompt: {custom[:120]}{'...' if len(custom) > 120 else ''}")
         else:
@@ -291,7 +291,7 @@ def _openai_translate_segments(segments, target_language='en', log=None):
                     'Content-Type': 'application/json'
                 },
                 json={
-                    'model': 'gpt-5.3',
+                    'model': 'gpt-4o-mini',
                     'temperature': 0.2,
                     'top_p': 1,
                     'frequency_penalty': 0,
@@ -369,7 +369,7 @@ def translate_segments(segments, target_language='en', log=None):
     """
     Translate all caption segments to target language.
     
-    Uses OpenAI GPT-5.3 when OPENAI_API_KEY is set for natural,
+    Uses OpenAI GPT-4o-mini when OPENAI_API_KEY is set for natural,
     context-aware translations that avoid repetition.
     Falls back to googletrans batch translation (with ||| separator
     for context), then per-segment translation as last resort.
@@ -395,7 +395,7 @@ def translate_segments(segments, target_language='en', log=None):
     api_key = globals().get('OPENAI_API_KEY')
     if api_key and REQUESTS_AVAILABLE:
         if log:
-            log(f"[TRANSLATE] Using OpenAI GPT-5.3 (API key: ...{api_key[-4:]})")
+            log(f"[TRANSLATE] Using OpenAI GPT-4o-mini (API key: ...{api_key[-4:]})")
             log(f"[TRANSLATE] Check API usage at: https://platform.openai.com/usage")
         openai_results = _openai_translate_segments(segments, target_language, log=log)
         if openai_results:
@@ -406,7 +406,7 @@ def translate_segments(segments, target_language='en', log=None):
                 new_seg["text"] = openai_results[i]
                 translated.append(new_seg)
             if log:
-                log("[TRANSLATE] ✓ OpenAI GPT-5.3 translation complete!")
+                log("[TRANSLATE] ✓ OpenAI GPT-4o-mini translation complete!")
             return translated
         if log:
             log("[TRANSLATE] ⚠ OpenAI translation failed — falling back to googletrans...")
@@ -7117,9 +7117,9 @@ class App:
                     self.translation_enabled_var.set(False)
                     globals()['TRANSLATION_ENABLED'] = False
                 elif has_openai and not has_googletrans:
-                    self.log("[Translation] ✓ Using OpenAI for translation (googletrans not installed)")
+                    self.log_to_console("[Translation] ✓ Using OpenAI for translation (googletrans not installed)")
                 elif has_openai:
-                    self.log("[Translation] ✓ Using OpenAI for translation (primary)")
+                    self.log_to_console("[Translation] ✓ Using OpenAI for translation (primary)")
         except Exception as e:
             print(f"Translation toggle error: {e}")
     
@@ -7129,14 +7129,14 @@ class App:
             key = self.openai_key_var.get().strip()
             if key:
                 globals()['OPENAI_API_KEY'] = key
-                if hasattr(self, 'log'):
-                    self.log("[OpenAI] API key set - contextual translations enabled")
-                    self.log("[OpenAI] Use 'Verify' button to test your key")
-                    self.log("[OpenAI] API usage visible at: https://platform.openai.com/usage")
+                if hasattr(self, 'log_to_console'):
+                    self.log_to_console("[OpenAI] API key set - contextual translations enabled")
+                    self.log_to_console("[OpenAI] Use 'Verify' button to test your key")
+                    self.log_to_console("[OpenAI] API usage visible at: https://platform.openai.com/usage")
             else:
                 globals()['OPENAI_API_KEY'] = None
-                if hasattr(self, 'log'):
-                    self.log("[OpenAI] API key cleared - using googletrans")
+                if hasattr(self, 'log_to_console'):
+                    self.log_to_console("[OpenAI] API key cleared - using googletrans")
         except Exception as e:
             print(f"OpenAI key apply error: {e}")
 
@@ -7160,8 +7160,8 @@ class App:
                     os.chmod(config_path, 0o600)
                 except Exception:
                     pass  # Windows doesn't support chmod the same way
-                if hasattr(self, 'log'):
-                    self.log("[OpenAI] API key saved and activated")
+                if hasattr(self, 'log_to_console'):
+                    self.log_to_console("[OpenAI] API key saved and activated")
                 messagebox.showinfo("API Key Saved", "OpenAI API key saved successfully!")
             except Exception as e:
                 messagebox.showerror("Save Error", f"Failed to save OpenAI API key: {e}")
@@ -7179,8 +7179,8 @@ class App:
                 messagebox.showerror("Missing Library", "The 'requests' library is required. Install with: pip install requests")
                 return
             import requests as _requests
-            if hasattr(self, 'log'):
-                self.log("[OpenAI] Verifying API key...")
+            if hasattr(self, 'log_to_console'):
+                self.log_to_console("[OpenAI] Verifying API key...")
             response = _requests.post(
                 'https://api.openai.com/v1/chat/completions',
                 headers={
@@ -7199,28 +7199,28 @@ class App:
             )
             if response.status_code == 200:
                 globals()['OPENAI_API_KEY'] = key
-                if hasattr(self, 'log'):
-                    self.log("[OpenAI] ✓ API key is VALID - translations will use GPT-5.3")
-                    self.log("[OpenAI] NOTE: OpenAI is used ONLY for translation, NOT for voice generation (TTS)")
-                    self.log("[OpenAI] NOTE: API usage is visible at https://platform.openai.com/usage")
-                    self.log("[OpenAI] API calls do NOT appear on chat.openai.com (that is a different product)")
+                if hasattr(self, 'log_to_console'):
+                    self.log_to_console("[OpenAI] ✓ API key is VALID - translations will use GPT-4o-mini")
+                    self.log_to_console("[OpenAI] NOTE: OpenAI is used ONLY for translation, NOT for voice generation (TTS)")
+                    self.log_to_console("[OpenAI] NOTE: API usage is visible at https://platform.openai.com/usage")
+                    self.log_to_console("[OpenAI] API calls do NOT appear on chat.openai.com (that is a different product)")
                 messagebox.showinfo("API Key Valid",
                     "✓ Your OpenAI API key is working!\n\n"
-                    "• Translations will use GPT-5.3\n"
+                    "• Translations will use GPT-4o-mini\n"
                     "• Voice generation uses GenAI Pro (NOT OpenAI)\n\n"
                     "IMPORTANT: API calls do NOT appear on chat.openai.com.\n"
                     "Check your API usage at:\nhttps://platform.openai.com/usage")
             elif response.status_code == 401:
-                if hasattr(self, 'log'):
-                    self.log("[OpenAI] ✗ API key is INVALID or expired")
+                if hasattr(self, 'log_to_console'):
+                    self.log_to_console("[OpenAI] ✗ API key is INVALID or expired")
                 messagebox.showerror("Invalid API Key",
                     "✗ Your OpenAI API key is invalid or expired.\n\n"
                     "Please check your key at:\nhttps://platform.openai.com/api-keys")
             elif response.status_code == 429:
-                if hasattr(self, 'log'):
-                    self.log("[OpenAI] ✗ Rate limit or quota exceeded (HTTP 429)")
-                    self.log("[OpenAI] FIX: Go to https://platform.openai.com/settings/organization/billing")
-                    self.log("[OpenAI] and add at least $5 prepaid credit. Free-tier keys have no quota.")
+                if hasattr(self, 'log_to_console'):
+                    self.log_to_console("[OpenAI] ✗ Rate limit or quota exceeded (HTTP 429)")
+                    self.log_to_console("[OpenAI] FIX: Go to https://platform.openai.com/settings/organization/billing")
+                    self.log_to_console("[OpenAI] and add at least $5 prepaid credit. Free-tier keys have no quota.")
                 messagebox.showwarning("Billing Credit Required",
                     "Your API key is valid but has no billing credit.\n\n"
                     "Even brand-new keys need prepaid credit to work.\n"
@@ -7230,13 +7230,13 @@ class App:
                     "After adding credit, click 'Verify' again.")
             else:
                 err_text = response.text[:200] + ('...' if len(response.text) > 200 else '')
-                if hasattr(self, 'log'):
-                    self.log(f"[OpenAI] ✗ API returned status {response.status_code}: {err_text}")
+                if hasattr(self, 'log_to_console'):
+                    self.log_to_console(f"[OpenAI] ✗ API returned status {response.status_code}: {err_text}")
                 messagebox.showerror("API Error",
                     f"API returned status {response.status_code}.\n\n{err_text}")
         except Exception as e:
-            if hasattr(self, 'log'):
-                self.log(f"[OpenAI] ✗ Verification failed: {e}")
+            if hasattr(self, 'log_to_console'):
+                self.log_to_console(f"[OpenAI] ✗ Verification failed: {e}")
             messagebox.showerror("Connection Error",
                 f"Could not connect to OpenAI API:\n{e}")
 
@@ -7245,11 +7245,11 @@ class App:
         try:
             prompt = self.translation_prompt_var.get().strip()
             globals()['TRANSLATION_CUSTOM_PROMPT'] = prompt
-            if hasattr(self, 'log'):
+            if hasattr(self, 'log_to_console'):
                 if prompt:
-                    self.log(f"[Translation] Custom prompt set: {prompt[:60]}...")
+                    self.log_to_console(f"[Translation] Custom prompt set: {prompt[:60]}...")
                 else:
-                    self.log("[Translation] Custom prompt cleared - using default")
+                    self.log_to_console("[Translation] Custom prompt cleared - using default")
         except Exception as e:
             print(f"Translation prompt apply error: {e}")
     
