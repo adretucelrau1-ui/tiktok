@@ -5844,6 +5844,11 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title("TikTok Auto Studio")
+        # --- Lock system for scroll protection ---
+        self._lock_vars = {}           # {lock_key: BooleanVar}
+        self._lock_labels = {}         # {lock_key: label widget}
+        self._lock_target_widgets = {} # {lock_key: (widget, is_combo_readonly)}
+        self._left_canvas = None       # set later during UI build
         # --- Apply modern dark UI theme ---
         try:
             style = ttk.Style()
@@ -6090,6 +6095,7 @@ class App:
         
         # Create Canvas and Scrollbar for scrollable left panel
         left_canvas = tk.Canvas(left_container, bg=self.BG_DARK, highlightthickness=0)
+        self._left_canvas = left_canvas
         left_scrollbar = ttk.Scrollbar(left_container, orient="vertical", command=left_canvas.yview)
         
         # Create the actual frame that will contain all controls
@@ -6210,21 +6216,25 @@ class App:
         row += 1
 
         # --- Voice Volume Control ---
-        ttk.Label(left_frame, text="Voice volume:").grid(row=row, column=0, sticky="e")
+        _lbl_voice = ttk.Label(left_frame, text="Voice volume:")
+        _lbl_voice.grid(row=row, column=0, sticky="e")
         self.voice_gain_var = tk.DoubleVar(value=VOICE_GAIN)
         self.voice_gain_scale = tk.Scale(left_frame, from_=0.0, to=3.0, resolution=0.01, orient='horizontal', length=200, showvalue=0, variable=self.voice_gain_var, command=self.on_voice_gain_changed)
         self.voice_gain_scale.grid(row=row, column=1, padx=(6,0))
         self.voice_gain_label = ttk.Label(left_frame, text=_gain_to_display(self.voice_gain_var.get()), width=22)
         self.voice_gain_label.grid(row=row, column=2, sticky='w', padx=(4,0))
+        self._register_lockable("voice_gain", _lbl_voice, self.voice_gain_scale)
         row += 1
 
         # --- Music Volume Control ---
-        ttk.Label(left_frame, text="Music volume:").grid(row=row, column=0, sticky="e")
+        _lbl_music = ttk.Label(left_frame, text="Music volume:")
+        _lbl_music.grid(row=row, column=0, sticky="e")
         self.music_gain_var = tk.DoubleVar(value=MUSIC_GAIN)
         self.music_gain_scale = tk.Scale(left_frame, from_=0.0, to=2.0, resolution=0.01, orient='horizontal', length=200, showvalue=0, variable=self.music_gain_var, command=self.on_music_gain_changed)
         self.music_gain_scale.grid(row=row, column=1, padx=(6,0))
         self.music_gain_label = ttk.Label(left_frame, text=_gain_to_display(self.music_gain_var.get()), width=22)
         self.music_gain_label.grid(row=row, column=2, sticky='w', padx=(4,0))
+        self._register_lockable("music_gain", _lbl_music, self.music_gain_scale)
         row += 1
 
         # --- Preview Mix Button ---
@@ -6246,13 +6256,15 @@ class App:
                        command=self.on_translation_toggle).grid(row=row, column=0, columnspan=3, sticky="w")
         row += 1
 
-        ttk.Label(left_frame, text="Target language:").grid(row=row, column=0, sticky="e")
+        _lbl_target_lang = ttk.Label(left_frame, text="Target language:")
+        _lbl_target_lang.grid(row=row, column=0, sticky="e")
         self.target_language_var = tk.StringVar(value=TARGET_LANGUAGE)
         languages = ['none', 'en', 'es', 'fr', 'de', 'it', 'pt', 'ro', 'ru', 'zh-cn', 'ja', 'ko']
-        language_combo = ttk.Combobox(left_frame, textvariable=self.target_language_var, values=languages, state='readonly', width=10)
-        language_combo.grid(row=row, column=1, sticky="w", padx=(6,0))
-        language_combo.bind('<<ComboboxSelected>>', self.on_language_selected)
+        self.language_combo = ttk.Combobox(left_frame, textvariable=self.target_language_var, values=languages, state='readonly', width=10)
+        self.language_combo.grid(row=row, column=1, sticky="w", padx=(6,0))
+        self.language_combo.bind('<<ComboboxSelected>>', self.on_language_selected)
         ttk.Label(left_frame, text="(for captions)").grid(row=row, column=2, sticky='w', padx=(4,0))
+        self._register_lockable("target_language", _lbl_target_lang, self.language_combo, is_combo_readonly=True)
         row += 1
 
         # OpenAI API Key for natural contextual translations
@@ -6289,7 +6301,8 @@ class App:
         row += 1
 
         # OpenAI Model selector for translation
-        ttk.Label(left_frame, text="Model:").grid(row=row, column=0, sticky="e")
+        _lbl_model = ttk.Label(left_frame, text="Model:")
+        _lbl_model.grid(row=row, column=0, sticky="e")
         model_frame = ttk.Frame(left_frame)
         model_frame.grid(row=row, column=1, columnspan=2, sticky="we", padx=(6,0))
         self.openai_model_var = tk.StringVar(value=saved_openai_model)
@@ -6303,6 +6316,7 @@ class App:
         self.openai_model_combo.pack(side="left", fill="x", expand=True)
         ttk.Button(model_frame, text="Set", style='Bordered.TButton', command=self._apply_openai_model, width=4).pack(side="left", padx=(4,0))
         ttk.Button(model_frame, text="Save", style='Bordered.TButton', command=self._save_openai_model, width=5).pack(side="left", padx=(4,0))
+        self._block_widget_scroll(self.openai_model_combo)
         row += 1
 
         # Custom translation prompt (uses {language} placeholder for selected target language)
@@ -6323,17 +6337,20 @@ class App:
                        command=self.on_ai_voice_toggle).grid(row=row, column=0, columnspan=3, sticky="w")
         row += 1
 
-        ttk.Label(left_frame, text="TTS language:").grid(row=row, column=0, sticky="e")
+        _lbl_tts_lang = ttk.Label(left_frame, text="TTS language:")
+        _lbl_tts_lang.grid(row=row, column=0, sticky="e")
         self.tts_language_var = tk.StringVar(value=TTS_LANGUAGE)
         tts_languages = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ro', 'ru', 'zh', 'ja', 'ko']
-        tts_combo = ttk.Combobox(left_frame, textvariable=self.tts_language_var, values=tts_languages, state='readonly', width=10)
-        tts_combo.grid(row=row, column=1, sticky="w", padx=(6,0))
-        tts_combo.bind('<<ComboboxSelected>>', self.on_tts_language_selected)
+        self.tts_combo = ttk.Combobox(left_frame, textvariable=self.tts_language_var, values=tts_languages, state='readonly', width=10)
+        self.tts_combo.grid(row=row, column=1, sticky="w", padx=(6,0))
+        self.tts_combo.bind('<<ComboboxSelected>>', self.on_tts_language_selected)
         ttk.Label(left_frame, text="(voice output)").grid(row=row, column=2, sticky='w', padx=(4,0))
+        self._register_lockable("tts_language", _lbl_tts_lang, self.tts_combo, is_combo_readonly=True)
         row += 1
 
         # Voice selection dropdown - shows voices for selected TTS language
-        ttk.Label(left_frame, text="Voice:").grid(row=row, column=0, sticky="e")
+        _lbl_tts_voice = ttk.Label(left_frame, text="Voice:")
+        _lbl_tts_voice.grid(row=row, column=0, sticky="e")
         
         # Available voices per language (from GenAI Pro API)
         self.voice_options = {
@@ -6365,6 +6382,7 @@ class App:
         self.tts_voice_combo.grid(row=row, column=1, sticky="w", padx=(6,0))
         self.tts_voice_combo.bind('<<ComboboxSelected>>', self.on_voice_selected)
         ttk.Label(left_frame, text="(select voice)").grid(row=row, column=2, sticky='w', padx=(4,0))
+        self._register_lockable("tts_voice", _lbl_tts_voice, self.tts_voice_combo, is_combo_readonly=True)
         
         # Load custom voices on startup
         self.update_voice_dropdown(TTS_LANGUAGE)
@@ -6410,11 +6428,13 @@ class App:
         self.custom_voice_name_entry.grid(row=row, column=1, columnspan=2, sticky="we", padx=(6,0))
         row += 1
         
-        ttk.Label(left_frame, text="Language Category:").grid(row=row, column=0, sticky="e")
+        _lbl_voice_lang = ttk.Label(left_frame, text="Language Category:")
+        _lbl_voice_lang.grid(row=row, column=0, sticky="e")
         self.custom_voice_lang_var = tk.StringVar(value="en")
         lang_options = ["en", "es", "fr", "de", "it", "pt", "ro", "ru", "zh", "ja", "ko", "ar"]
         self.custom_voice_lang_combo = ttk.Combobox(left_frame, textvariable=self.custom_voice_lang_var, values=lang_options, state="readonly", width=10)
         self.custom_voice_lang_combo.grid(row=row, column=1, sticky="w", padx=(6,0))
+        self._register_lockable("custom_voice_lang", _lbl_voice_lang, self.custom_voice_lang_combo, is_combo_readonly=True)
         row += 1
         
         ttk.Button(left_frame, text="Save Custom Voice", style='Accent.TButton', command=self.on_save_custom_voice).grid(row=row, column=1, sticky="w", padx=(6,0))
@@ -6470,15 +6490,17 @@ class App:
         ttk.Label(left_frame, text="💎").grid(row=row, column=2, sticky="w")
         row += 1
         
-        ttk.Label(left_frame, text="Intensity:").grid(row=row, column=0, sticky="e", padx=(20,0))
+        _lbl_sharp = ttk.Label(left_frame, text="Intensity:")
+        _lbl_sharp.grid(row=row, column=0, sticky="e", padx=(20,0))
         self.effect_sharpness_intensity_var = tk.DoubleVar(value=1.5)
-        sharpness_scale = tk.Scale(left_frame, from_=0.5, to=3.0, resolution=0.1, orient='horizontal', 
+        self.sharpness_scale = tk.Scale(left_frame, from_=0.5, to=3.0, resolution=0.1, orient='horizontal', 
                                    length=120, showvalue=0, variable=self.effect_sharpness_intensity_var,
                                    command=lambda v: self._mini_update_worker_async())
-        sharpness_scale.grid(row=row, column=1, padx=(6,0))
+        self.sharpness_scale.grid(row=row, column=1, padx=(6,0))
         self.sharpness_label = ttk.Label(left_frame, text=f"{self.effect_sharpness_intensity_var.get():.1f}x")
         self.sharpness_label.grid(row=row, column=2, sticky='w', padx=(4,0))
         self.effect_sharpness_intensity_var.trace('w', lambda *args: self.sharpness_label.config(text=f"{self.effect_sharpness_intensity_var.get():.1f}x"))
+        self._register_lockable("sharpness", _lbl_sharp, self.sharpness_scale)
         row += 1
 
         # Saturation boost
@@ -6488,15 +6510,17 @@ class App:
         ttk.Label(left_frame, text="🌈").grid(row=row, column=2, sticky="w")
         row += 1
         
-        ttk.Label(left_frame, text="Intensity:").grid(row=row, column=0, sticky="e", padx=(20,0))
+        _lbl_sat = ttk.Label(left_frame, text="Intensity:")
+        _lbl_sat.grid(row=row, column=0, sticky="e", padx=(20,0))
         self.effect_saturation_intensity_var = tk.DoubleVar(value=1.3)
-        saturation_scale = tk.Scale(left_frame, from_=0.5, to=2.0, resolution=0.1, orient='horizontal', 
+        self.saturation_scale = tk.Scale(left_frame, from_=0.5, to=2.0, resolution=0.1, orient='horizontal', 
                                     length=120, showvalue=0, variable=self.effect_saturation_intensity_var,
                                     command=lambda v: self._mini_update_worker_async())
-        saturation_scale.grid(row=row, column=1, padx=(6,0))
+        self.saturation_scale.grid(row=row, column=1, padx=(6,0))
         self.saturation_label = ttk.Label(left_frame, text=f"{self.effect_saturation_intensity_var.get():.1f}x")
         self.saturation_label.grid(row=row, column=2, sticky='w', padx=(4,0))
         self.effect_saturation_intensity_var.trace('w', lambda *args: self.saturation_label.config(text=f"{self.effect_saturation_intensity_var.get():.1f}x"))
+        self._register_lockable("saturation", _lbl_sat, self.saturation_scale)
         row += 1
 
         # Contrast enhancement
@@ -6506,15 +6530,17 @@ class App:
         ttk.Label(left_frame, text="⚡").grid(row=row, column=2, sticky="w")
         row += 1
         
-        ttk.Label(left_frame, text="Intensity:").grid(row=row, column=0, sticky="e", padx=(20,0))
+        _lbl_con = ttk.Label(left_frame, text="Intensity:")
+        _lbl_con.grid(row=row, column=0, sticky="e", padx=(20,0))
         self.effect_contrast_intensity_var = tk.DoubleVar(value=1.2)
-        contrast_scale = tk.Scale(left_frame, from_=0.5, to=2.0, resolution=0.1, orient='horizontal', 
+        self.contrast_scale = tk.Scale(left_frame, from_=0.5, to=2.0, resolution=0.1, orient='horizontal', 
                                  length=120, showvalue=0, variable=self.effect_contrast_intensity_var,
                                  command=lambda v: self._mini_update_worker_async())
-        contrast_scale.grid(row=row, column=1, padx=(6,0))
+        self.contrast_scale.grid(row=row, column=1, padx=(6,0))
         self.contrast_label = ttk.Label(left_frame, text=f"{self.effect_contrast_intensity_var.get():.1f}x")
         self.contrast_label.grid(row=row, column=2, sticky='w', padx=(4,0))
         self.effect_contrast_intensity_var.trace('w', lambda *args: self.contrast_label.config(text=f"{self.effect_contrast_intensity_var.get():.1f}x"))
+        self._register_lockable("contrast", _lbl_con, self.contrast_scale)
         row += 1
 
         # Brightness adjustment
@@ -6524,15 +6550,17 @@ class App:
         ttk.Label(left_frame, text="☀️").grid(row=row, column=2, sticky="w")
         row += 1
         
-        ttk.Label(left_frame, text="Intensity:").grid(row=row, column=0, sticky="e", padx=(20,0))
+        _lbl_bri = ttk.Label(left_frame, text="Intensity:")
+        _lbl_bri.grid(row=row, column=0, sticky="e", padx=(20,0))
         self.effect_brightness_intensity_var = tk.DoubleVar(value=1.15)
-        brightness_scale = tk.Scale(left_frame, from_=0.5, to=2.0, resolution=0.05, orient='horizontal', 
+        self.brightness_scale = tk.Scale(left_frame, from_=0.5, to=2.0, resolution=0.05, orient='horizontal', 
                                     length=120, showvalue=0, variable=self.effect_brightness_intensity_var,
                                     command=lambda v: self._mini_update_worker_async())
-        brightness_scale.grid(row=row, column=1, padx=(6,0))
+        self.brightness_scale.grid(row=row, column=1, padx=(6,0))
         self.brightness_label = ttk.Label(left_frame, text=f"{self.effect_brightness_intensity_var.get():.2f}x")
         self.brightness_label.grid(row=row, column=2, sticky='w', padx=(4,0))
         self.effect_brightness_intensity_var.trace('w', lambda *args: self.brightness_label.config(text=f"{self.effect_brightness_intensity_var.get():.2f}x"))
+        self._register_lockable("brightness", _lbl_bri, self.brightness_scale)
         row += 1
 
         # Film grain / Vintage
@@ -6542,15 +6570,17 @@ class App:
         ttk.Label(left_frame, text="📽️").grid(row=row, column=2, sticky="w")
         row += 1
         
-        ttk.Label(left_frame, text="Grain:").grid(row=row, column=0, sticky="e", padx=(20,0))
+        _lbl_vin = ttk.Label(left_frame, text="Grain:")
+        _lbl_vin.grid(row=row, column=0, sticky="e", padx=(20,0))
         self.effect_vintage_intensity_var = tk.DoubleVar(value=0.3)
-        vintage_scale = tk.Scale(left_frame, from_=0.1, to=1.0, resolution=0.05, orient='horizontal', 
+        self.vintage_scale = tk.Scale(left_frame, from_=0.1, to=1.0, resolution=0.05, orient='horizontal', 
                                 length=120, showvalue=0, variable=self.effect_vintage_intensity_var,
                                 command=lambda v: self._mini_update_worker_async())
-        vintage_scale.grid(row=row, column=1, padx=(6,0))
+        self.vintage_scale.grid(row=row, column=1, padx=(6,0))
         self.vintage_label = ttk.Label(left_frame, text=f"{self.effect_vintage_intensity_var.get():.2f}")
         self.vintage_label.grid(row=row, column=2, sticky='w', padx=(4,0))
         self.effect_vintage_intensity_var.trace('w', lambda *args: self.vintage_label.config(text=f"{self.effect_vintage_intensity_var.get():.2f}"))
+        self._register_lockable("vintage", _lbl_vin, self.vintage_scale)
         row += 1
 
         ttk.Separator(left_frame).grid(row=row, column=0, columnspan=3, sticky="we", pady=8)
@@ -6566,59 +6596,69 @@ class App:
         ttk.Label(left_frame, text="🔲").grid(row=row, column=2, sticky="w")
         row += 1
 
-        ttk.Label(left_frame, text="X (%):").grid(row=row, column=0, sticky="e", padx=(20,0))
+        _lbl_bx = ttk.Label(left_frame, text="X (%):")
+        _lbl_bx.grid(row=row, column=0, sticky="e", padx=(20,0))
         self.blur_overlay_x_var = tk.DoubleVar(value=10.0)
-        blur_x_scale = tk.Scale(left_frame, from_=0, to=100, resolution=0.5, orient='horizontal',
+        self.blur_x_scale = tk.Scale(left_frame, from_=0, to=100, resolution=0.5, orient='horizontal',
                                 length=120, showvalue=0, variable=self.blur_overlay_x_var,
                                 command=lambda v: self._mini_update_worker_async())
-        blur_x_scale.grid(row=row, column=1, padx=(6,0))
+        self.blur_x_scale.grid(row=row, column=1, padx=(6,0))
         self.blur_overlay_x_label = ttk.Label(left_frame, text=f"{self.blur_overlay_x_var.get():.1f}%")
         self.blur_overlay_x_label.grid(row=row, column=2, sticky='w', padx=(4,0))
         self.blur_overlay_x_var.trace('w', lambda *args: self.blur_overlay_x_label.config(text=f"{self.blur_overlay_x_var.get():.1f}%"))
+        self._register_lockable("blur_x", _lbl_bx, self.blur_x_scale)
         row += 1
 
-        ttk.Label(left_frame, text="Y (%):").grid(row=row, column=0, sticky="e", padx=(20,0))
+        _lbl_by = ttk.Label(left_frame, text="Y (%):")
+        _lbl_by.grid(row=row, column=0, sticky="e", padx=(20,0))
         self.blur_overlay_y_var = tk.DoubleVar(value=10.0)
-        blur_y_scale = tk.Scale(left_frame, from_=0, to=100, resolution=0.5, orient='horizontal',
+        self.blur_y_scale = tk.Scale(left_frame, from_=0, to=100, resolution=0.5, orient='horizontal',
                                 length=120, showvalue=0, variable=self.blur_overlay_y_var,
                                 command=lambda v: self._mini_update_worker_async())
-        blur_y_scale.grid(row=row, column=1, padx=(6,0))
+        self.blur_y_scale.grid(row=row, column=1, padx=(6,0))
         self.blur_overlay_y_label = ttk.Label(left_frame, text=f"{self.blur_overlay_y_var.get():.1f}%")
         self.blur_overlay_y_label.grid(row=row, column=2, sticky='w', padx=(4,0))
         self.blur_overlay_y_var.trace('w', lambda *args: self.blur_overlay_y_label.config(text=f"{self.blur_overlay_y_var.get():.1f}%"))
+        self._register_lockable("blur_y", _lbl_by, self.blur_y_scale)
         row += 1
 
-        ttk.Label(left_frame, text="W (%):").grid(row=row, column=0, sticky="e", padx=(20,0))
+        _lbl_bw = ttk.Label(left_frame, text="W (%):")
+        _lbl_bw.grid(row=row, column=0, sticky="e", padx=(20,0))
         self.blur_overlay_w_var = tk.DoubleVar(value=20.0)
-        blur_w_scale = tk.Scale(left_frame, from_=1, to=100, resolution=0.5, orient='horizontal',
+        self.blur_w_scale = tk.Scale(left_frame, from_=1, to=100, resolution=0.5, orient='horizontal',
                                 length=120, showvalue=0, variable=self.blur_overlay_w_var,
                                 command=lambda v: self._mini_update_worker_async())
-        blur_w_scale.grid(row=row, column=1, padx=(6,0))
+        self.blur_w_scale.grid(row=row, column=1, padx=(6,0))
         self.blur_overlay_w_label = ttk.Label(left_frame, text=f"{self.blur_overlay_w_var.get():.1f}%")
         self.blur_overlay_w_label.grid(row=row, column=2, sticky='w', padx=(4,0))
         self.blur_overlay_w_var.trace('w', lambda *args: self.blur_overlay_w_label.config(text=f"{self.blur_overlay_w_var.get():.1f}%"))
+        self._register_lockable("blur_w", _lbl_bw, self.blur_w_scale)
         row += 1
 
-        ttk.Label(left_frame, text="H (%):").grid(row=row, column=0, sticky="e", padx=(20,0))
+        _lbl_bh = ttk.Label(left_frame, text="H (%):")
+        _lbl_bh.grid(row=row, column=0, sticky="e", padx=(20,0))
         self.blur_overlay_h_var = tk.DoubleVar(value=15.0)
-        blur_h_scale = tk.Scale(left_frame, from_=1, to=100, resolution=0.5, orient='horizontal',
+        self.blur_h_scale = tk.Scale(left_frame, from_=1, to=100, resolution=0.5, orient='horizontal',
                                 length=120, showvalue=0, variable=self.blur_overlay_h_var,
                                 command=lambda v: self._mini_update_worker_async())
-        blur_h_scale.grid(row=row, column=1, padx=(6,0))
+        self.blur_h_scale.grid(row=row, column=1, padx=(6,0))
         self.blur_overlay_h_label = ttk.Label(left_frame, text=f"{self.blur_overlay_h_var.get():.1f}%")
         self.blur_overlay_h_label.grid(row=row, column=2, sticky='w', padx=(4,0))
         self.blur_overlay_h_var.trace('w', lambda *args: self.blur_overlay_h_label.config(text=f"{self.blur_overlay_h_var.get():.1f}%"))
+        self._register_lockable("blur_h", _lbl_bh, self.blur_h_scale)
         row += 1
 
-        ttk.Label(left_frame, text="Blur:").grid(row=row, column=0, sticky="e", padx=(20,0))
+        _lbl_bi = ttk.Label(left_frame, text="Blur:")
+        _lbl_bi.grid(row=row, column=0, sticky="e", padx=(20,0))
         self.blur_overlay_intensity_var = tk.IntVar(value=20)
-        blur_intensity_scale = tk.Scale(left_frame, from_=2, to=80, resolution=1, orient='horizontal',
+        self.blur_intensity_scale = tk.Scale(left_frame, from_=2, to=80, resolution=1, orient='horizontal',
                                         length=120, showvalue=0, variable=self.blur_overlay_intensity_var,
                                         command=lambda v: self._mini_update_worker_async())
-        blur_intensity_scale.grid(row=row, column=1, padx=(6,0))
+        self.blur_intensity_scale.grid(row=row, column=1, padx=(6,0))
         self.blur_overlay_intensity_label = ttk.Label(left_frame, text=f"{self.blur_overlay_intensity_var.get()}")
         self.blur_overlay_intensity_label.grid(row=row, column=2, sticky='w', padx=(4,0))
         self.blur_overlay_intensity_var.trace('w', lambda *args: self.blur_overlay_intensity_label.config(text=f"{self.blur_overlay_intensity_var.get()}"))
+        self._register_lockable("blur_intensity", _lbl_bi, self.blur_intensity_scale)
         row += 1
 
         ttk.Separator(left_frame).grid(row=row, column=0, columnspan=3, sticky="we", pady=8)
@@ -6775,13 +6815,15 @@ class App:
             try:
                 sw_frame = ttk.Frame(self.font_panel)
                 sw_frame.pack(fill='x', pady=(6,4))
-                ttk.Label(sw_frame, text='Stroke width:').grid(row=0, column=0, sticky='w')
+                _lbl_sw = ttk.Label(sw_frame, text='Stroke width:')
+                _lbl_sw.grid(row=0, column=0, sticky='w')
                 max_w = max(1, int(CAPTION_FONT_SIZE * 0.5))
                 self.stroke_width_var = tk.DoubleVar(value=float(globals().get('CAPTION_STROKE_WIDTH', max(1, int(CAPTION_FONT_SIZE * 0.05)))))
                 self.stroke_width_scale = tk.Scale(sw_frame, from_=0, to=max_w, orient='horizontal', length=140, showvalue=0, variable=self.stroke_width_var, command=self.on_stroke_width_changed)
                 self.stroke_width_scale.grid(row=0, column=1, padx=(6,8))
                 self.stroke_width_label = ttk.Label(sw_frame, text=str(int(self.stroke_width_var.get())))
                 self.stroke_width_label.grid(row=0, column=2, sticky='w')
+                self._register_lockable("stroke_width", _lbl_sw, self.stroke_width_scale)
             except Exception:
                 pass
 
@@ -6789,7 +6831,8 @@ class App:
             try:
                 pos_frame = ttk.Frame(self.font_panel)
                 pos_frame.pack(fill='x', pady=(6,4))
-                ttk.Label(pos_frame, text='Caption Y offset:').grid(row=0, column=0, sticky='w')
+                _lbl_yoff = ttk.Label(pos_frame, text='Caption Y offset:')
+                _lbl_yoff.grid(row=0, column=0, sticky='w')
                 # Offset from bottom in pixels (0 = at bottom, negative = move up, positive = move down)
                 self.caption_y_offset_var = tk.IntVar(value=0)
                 self.caption_y_offset_scale = tk.Scale(pos_frame, from_=-1080, to=200, orient='horizontal', length=140, showvalue=0, resolution=1, variable=self.caption_y_offset_var, command=self.on_caption_position_changed)
@@ -6802,15 +6845,18 @@ class App:
                 # Keep the label reference for backward compatibility (preset load/save uses it)
                 self.caption_y_offset_label = ttk.Label(pos_frame, text="px")
                 self.caption_y_offset_label.grid(row=0, column=3, sticky='w', padx=(2,0))
+                self._register_lockable("caption_y_offset", _lbl_yoff, self.caption_y_offset_scale)
                 
                 # --- Font Size slider (row 1) ---
-                ttk.Label(pos_frame, text='Font Size:').grid(row=1, column=0, sticky='w', pady=(4,0))
+                _lbl_fs = ttk.Label(pos_frame, text='Font Size:')
+                _lbl_fs.grid(row=1, column=0, sticky='w', pady=(4,0))
                 # Font size in pixels (20-120 range, default 56)
                 self.caption_font_size_var = tk.IntVar(value=globals().get('CAPTION_FONT_SIZE', 56))
                 self.caption_font_size_scale = tk.Scale(pos_frame, from_=20, to=120, orient='horizontal', length=140, showvalue=0, variable=self.caption_font_size_var, command=self.on_caption_font_size_changed)
                 self.caption_font_size_scale.grid(row=1, column=1, padx=(6,8), pady=(4,0))
                 self.caption_font_size_label = ttk.Label(pos_frame, text=f"{self.caption_font_size_var.get()}px")
                 self.caption_font_size_label.grid(row=1, column=2, sticky='w', pady=(4,0))
+                self._register_lockable("caption_font_size", _lbl_fs, self.caption_font_size_scale)
             except Exception:
                 pass
 
@@ -6825,10 +6871,12 @@ class App:
         # --- Caption template selector + preview ---
         try:
             self.template_var = tk.StringVar(value='2 words')
-            ttk.Label(self.font_panel, text='Caption template:').pack(anchor='nw', pady=(6,0))
+            _lbl_tpl = ttk.Label(self.font_panel, text='Caption template:')
+            _lbl_tpl.pack(anchor='nw', pady=(6,0))
             self.template_cb = ttk.Combobox(self.font_panel, values=['1 word', '2 words', '3 words'], textvariable=self.template_var, state='readonly', width=20)
             self.template_cb.pack(fill='x', pady=(2,4))
             self.template_cb.bind('<<ComboboxSelected>>', self.on_template_selected)
+            self._register_lockable("template", _lbl_tpl, self.template_cb, is_combo_readonly=True)
             # Preview area for generated caption image
             self.caption_preview_canvas = tk.Canvas(self.font_panel, width=320, height=120,
                                                     bg=self.BG_SECONDARY, highlightthickness=0)
@@ -7152,7 +7200,89 @@ class App:
                 self.music_gain_label.config(text=_gain_to_display(gain))
         except Exception:
             pass
-    
+
+    # ── Lock / scroll-protection helpers ──────────────────────────────
+    def _register_lockable(self, lock_key, label_widget, target_widget, is_combo_readonly=False):
+        """Register a widget as lockable.  Adds 🔓 prefix + click handler to the label."""
+        self._lock_vars[lock_key] = tk.BooleanVar(value=False)
+        self._lock_labels[lock_key] = label_widget
+        self._lock_target_widgets[lock_key] = (target_widget, is_combo_readonly)
+        # Make the label a clickable lock toggle
+        try:
+            label_widget.config(cursor="hand2")
+        except Exception:
+            pass
+        label_widget.bind("<Button-1>", lambda e, k=lock_key: self._toggle_lock(k))
+        old_text = label_widget.cget("text")
+        label_widget.config(text=f"🔓{old_text}")
+        # Block scroll wheel on the target widget
+        self._block_widget_scroll(target_widget)
+
+    def _toggle_lock(self, lock_key):
+        """Toggle lock state for a registered widget."""
+        if lock_key not in self._lock_vars:
+            return
+        var = self._lock_vars[lock_key]
+        new_state = not var.get()
+        var.set(new_state)
+        self._apply_lock(lock_key, new_state)
+
+    def _apply_lock(self, lock_key, locked):
+        """Apply lock/unlock visual + state to a widget."""
+        if lock_key not in self._lock_labels:
+            return
+        lbl = self._lock_labels[lock_key]
+        widget, is_combo_readonly = self._lock_target_widgets[lock_key]
+        old_text = lbl.cget("text")
+        if locked:
+            lbl.config(text=old_text.replace("🔓", "🔒"))
+            try:
+                widget.config(state='disabled')
+            except Exception:
+                pass
+        else:
+            lbl.config(text=old_text.replace("🔒", "🔓"))
+            try:
+                if is_combo_readonly:
+                    widget.config(state='readonly')
+                else:
+                    widget.config(state='normal')
+            except Exception:
+                pass
+
+    def _block_widget_scroll(self, widget):
+        """Prevent scroll wheel from changing a Scale/Combobox/Spinbox value.
+        Redirects the event to scroll the left canvas instead."""
+        def _redirect(event):
+            if self._left_canvas:
+                self._left_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            return "break"
+        widget.bind("<MouseWheel>", _redirect)
+
+    def _setup_scroll_protection(self):
+        """Block scroll wheel on ALL Scale/Combobox/Spinbox widgets in the left panel
+        that haven't been explicitly registered as lockable (those are already blocked)."""
+        already_blocked = set()
+        for _k, (w, _c) in self._lock_target_widgets.items():
+            already_blocked.add(str(w))
+        def _recurse(parent):
+            for child in parent.winfo_children():
+                if isinstance(child, (tk.Scale, ttk.Combobox, ttk.Spinbox)):
+                    if str(child) not in already_blocked:
+                        self._block_widget_scroll(child)
+                _recurse(child)
+        if self._left_canvas:
+            # The left_frame is the first (and only) window inside the canvas
+            try:
+                frame_ids = self._left_canvas.find_all()
+                if frame_ids:
+                    frame_widget = self._left_canvas.nametowidget(
+                        self._left_canvas.itemcget(frame_ids[0], 'window'))
+                    _recurse(frame_widget)
+            except Exception:
+                pass
+    # ── end lock helpers ──────────────────────────────────────────────
+
     def _preview_audio_mix(self):
         """Preview voice + music mix at current volume levels using FFmpeg/ffplay."""
         try:
@@ -9913,6 +10043,9 @@ class App:
                 "blur_radius": globals().get('STATIC_BG_BLUR_RADIUS', 25),
                 "bg_scale_extra": globals().get('BG_SCALE_EXTRA', 1.08),
                 "dim_factor": globals().get('DIM_FACTOR', 1.0),
+                
+                # Lock states (scroll protection)
+                "lock_states": {k: v.get() for k, v in self._lock_vars.items()},
             }
             
             # Save to file
@@ -10032,6 +10165,13 @@ class App:
             globals()['BG_SCALE_EXTRA'] = preset_data.get("bg_scale_extra", 1.08)
             # DIM_FACTOR: no longer loaded from presets (always use global default 1.0)
             
+            # Restore lock states
+            saved_locks = preset_data.get("lock_states", {})
+            for lock_key, locked in saved_locks.items():
+                if lock_key in self._lock_vars:
+                    self._lock_vars[lock_key].set(locked)
+                    self._apply_lock(lock_key, locked)
+            
             # Update UI elements that show values
             self._update_color_canvases()
             self.update_mini_preview_immediate()
@@ -10147,6 +10287,13 @@ class App:
             globals()['BG_SCALE_EXTRA'] = preset_data.get("bg_scale_extra", 1.08)
             # DIM_FACTOR: no longer loaded from presets (always use global default 1.0)
             
+            # Restore lock states
+            saved_locks = preset_data.get("lock_states", {})
+            for lock_key, locked in saved_locks.items():
+                if lock_key in self._lock_vars:
+                    self._lock_vars[lock_key].set(locked)
+                    self._apply_lock(lock_key, locked)
+            
             # Update UI elements that show values
             self._update_color_canvases()
             
@@ -10238,6 +10385,11 @@ class App:
             globals()['BG_SCALE_EXTRA'] = 1.08
             globals()['DIM_FACTOR'] = 1.0
             
+            # Unlock all locked widgets
+            for lock_key in list(self._lock_vars.keys()):
+                self._lock_vars[lock_key].set(False)
+                self._apply_lock(lock_key, False)
+            
             # Update UI
             self._update_color_canvases()
             self.update_mini_preview_immediate()
@@ -10299,6 +10451,9 @@ def main():
             root.after(100, app.load_preset_silent)
         except Exception:
             pass  # Silently ignore errors during auto-load
+    
+    # Catch any remaining Scale/Combobox/Spinbox widgets not explicitly registered
+    root.after(200, app._setup_scroll_protection)
     
     root.mainloop()
 
