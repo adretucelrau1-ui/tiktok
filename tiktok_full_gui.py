@@ -205,7 +205,7 @@ def translate_text(text, target_language='en', log=None):
 
 def _openai_translate_segments(segments, target_language='en', log=None):
     """
-    Translate caption segments using OpenAI GPT-4o-mini for natural,
+    Translate caption segments using OpenAI for natural,
     context-aware translations that avoid repetition.
     
     Sends all segments as numbered lines so the model can see full context
@@ -274,7 +274,7 @@ def _openai_translate_segments(segments, target_language='en', log=None):
         user_content = numbered_text
     
     if log:
-        log(f"[OpenAI TRANSLATE] Sending {len(segments)} segments to GPT-4o-mini for {lang_name} translation...")
+        log(f"[OpenAI TRANSLATE] Sending {len(segments)} segments to {globals().get('OPENAI_MODEL', 'gpt-4o-mini')} for {lang_name} translation...")
         if custom:
             log(f"[OpenAI TRANSLATE] Using CUSTOM user prompt: {custom[:120]}{'...' if len(custom) > 120 else ''}")
         else:
@@ -291,7 +291,7 @@ def _openai_translate_segments(segments, target_language='en', log=None):
                     'Content-Type': 'application/json'
                 },
                 json={
-                    'model': 'gpt-4o-mini',
+                    'model': globals().get('OPENAI_MODEL', 'gpt-4o-mini'),
                     'temperature': 0.2,
                     'top_p': 1,
                     'frequency_penalty': 0,
@@ -369,7 +369,7 @@ def translate_segments(segments, target_language='en', log=None):
     """
     Translate all caption segments to target language.
     
-    Uses OpenAI GPT-4o-mini when OPENAI_API_KEY is set for natural,
+    Uses OpenAI when OPENAI_API_KEY is set for natural,
     context-aware translations that avoid repetition.
     Falls back to googletrans batch translation (with ||| separator
     for context), then per-segment translation as last resort.
@@ -395,7 +395,7 @@ def translate_segments(segments, target_language='en', log=None):
     api_key = globals().get('OPENAI_API_KEY')
     if api_key and REQUESTS_AVAILABLE:
         if log:
-            log(f"[TRANSLATE] Using OpenAI GPT-4o-mini (API key: ...{api_key[-4:]})")
+            log(f"[TRANSLATE] Using OpenAI {globals().get('OPENAI_MODEL', 'gpt-4o-mini')} (API key: ...{api_key[-4:]})")
             log(f"[TRANSLATE] Check API usage at: https://platform.openai.com/usage")
         openai_results = _openai_translate_segments(segments, target_language, log=log)
         if openai_results:
@@ -406,7 +406,7 @@ def translate_segments(segments, target_language='en', log=None):
                 new_seg["text"] = openai_results[i]
                 translated.append(new_seg)
             if log:
-                log("[TRANSLATE] ✓ OpenAI GPT-4o-mini translation complete!")
+                log(f"[TRANSLATE] ✓ OpenAI {globals().get('OPENAI_MODEL', 'gpt-4o-mini')} translation complete!")
             return translated
         if log:
             log("[TRANSLATE] ⚠ OpenAI translation failed — falling back to googletrans...")
@@ -1555,6 +1555,7 @@ TRANS_TO_TTS_LANG = {'zh-cn': 'zh', 'zh-tw': 'zh'}
 TTS_ENGINE = 'gtts'  # Options: 'gtts' (free, basic), 'elevenlabs', 'openai', 'azure'
 ELEVENLABS_API_KEY = None
 OPENAI_API_KEY = None
+OPENAI_MODEL = "gpt-4o-mini"  # OpenAI model for translation; user can change via UI dropdown
 TRANSLATION_CUSTOM_PROMPT = ""  # User-defined prompt for OpenAI translation; {language} is auto-replaced
 STOP_REQUESTED = False
 AZURE_SPEECH_KEY = None
@@ -6227,8 +6228,9 @@ class App:
         ttk.Label(left_frame, text="OpenAI Key:").grid(row=row, column=0, sticky="e")
         openai_frame = ttk.Frame(left_frame)
         openai_frame.grid(row=row, column=1, columnspan=2, sticky="we", padx=(6,0))
-        # Try to load saved OpenAI key from config file
+        # Try to load saved OpenAI key and model from config file
         saved_openai_key = ""
+        saved_openai_model = OPENAI_MODEL
         try:
             openai_config_path = os.path.join(os.path.dirname(__file__), "openai_config.json")
             if os.path.exists(openai_config_path):
@@ -6240,6 +6242,11 @@ class App:
                         print("[OpenAI] API key loaded from openai_config.json")
                         print("[OpenAI] NOTE: API calls do NOT appear on chat.openai.com")
                         print("[OpenAI] Check your API usage at: https://platform.openai.com/usage")
+                    saved_model = openai_cfg.get("openai_model", "")
+                    if saved_model:
+                        saved_openai_model = saved_model
+                        globals()['OPENAI_MODEL'] = saved_model
+                        print(f"[OpenAI] Model loaded from config: {saved_model}")
         except Exception:
             pass
         self.openai_key_var = tk.StringVar(value=saved_openai_key)
@@ -6248,6 +6255,23 @@ class App:
         ttk.Button(openai_frame, text="Set", style='Bordered.TButton', command=self._apply_openai_key, width=4).pack(side="left", padx=(4,0))
         ttk.Button(openai_frame, text="Save", style='Bordered.TButton', command=self._save_openai_key, width=5).pack(side="left", padx=(4,0))
         ttk.Button(openai_frame, text="Verify", style='Bordered.TButton', command=self._verify_openai_key, width=6).pack(side="left", padx=(4,0))
+        row += 1
+
+        # OpenAI Model selector for translation
+        ttk.Label(left_frame, text="Model:").grid(row=row, column=0, sticky="e")
+        model_frame = ttk.Frame(left_frame)
+        model_frame.grid(row=row, column=1, columnspan=2, sticky="we", padx=(6,0))
+        self.openai_model_var = tk.StringVar(value=saved_openai_model)
+        model_choices = [
+            "gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo",
+            "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+            "o4-mini", "o3-mini",
+        ]
+        self.openai_model_combo = ttk.Combobox(model_frame, textvariable=self.openai_model_var,
+                                                values=model_choices, width=18)
+        self.openai_model_combo.pack(side="left", fill="x", expand=True)
+        ttk.Button(model_frame, text="Set", style='Bordered.TButton', command=self._apply_openai_model, width=4).pack(side="left", padx=(4,0))
+        ttk.Button(model_frame, text="Save", style='Bordered.TButton', command=self._save_openai_model, width=5).pack(side="left", padx=(4,0))
         row += 1
 
         # Custom translation prompt (uses {language} placeholder for selected target language)
@@ -7149,9 +7173,16 @@ class App:
                 return
             # Apply the key first
             globals()['OPENAI_API_KEY'] = key
-            # Save to config file
+            # Save to config file (preserve existing model setting)
             config_path = os.path.join(os.path.dirname(__file__), "openai_config.json")
-            config = {"openai_api_key": key}
+            config = {}
+            try:
+                if os.path.exists(config_path):
+                    with open(config_path, 'r') as f:
+                        config = json.load(f)
+            except Exception:
+                pass
+            config["openai_api_key"] = key
             try:
                 with open(config_path, 'w') as f:
                     json.dump(config, f)
@@ -7167,6 +7198,53 @@ class App:
                 messagebox.showerror("Save Error", f"Failed to save OpenAI API key: {e}")
         except Exception as e:
             print(f"Save OpenAI key error: {e}")
+
+    def _apply_openai_model(self):
+        """Apply the OpenAI model selection from the GUI combo box."""
+        try:
+            model = self.openai_model_var.get().strip()
+            if model:
+                globals()['OPENAI_MODEL'] = model
+                if hasattr(self, 'log_to_console'):
+                    self.log_to_console(f"[OpenAI] Model set to: {model}")
+            else:
+                globals()['OPENAI_MODEL'] = 'gpt-4o-mini'
+                if hasattr(self, 'log_to_console'):
+                    self.log_to_console("[OpenAI] Model reset to default: gpt-4o-mini")
+        except Exception as e:
+            print(f"OpenAI model apply error: {e}")
+
+    def _save_openai_model(self):
+        """Save the OpenAI model selection to the config file and apply it."""
+        try:
+            model = self.openai_model_var.get().strip()
+            if not model:
+                model = 'gpt-4o-mini'
+            globals()['OPENAI_MODEL'] = model
+            # Save to config file (preserve existing key setting)
+            config_path = os.path.join(os.path.dirname(__file__), "openai_config.json")
+            config = {}
+            try:
+                if os.path.exists(config_path):
+                    with open(config_path, 'r') as f:
+                        config = json.load(f)
+            except Exception:
+                pass
+            config["openai_model"] = model
+            try:
+                with open(config_path, 'w') as f:
+                    json.dump(config, f)
+                try:
+                    os.chmod(config_path, 0o600)
+                except Exception:
+                    pass
+                if hasattr(self, 'log_to_console'):
+                    self.log_to_console(f"[OpenAI] Model saved: {model}")
+                messagebox.showinfo("Model Saved", f"OpenAI model saved: {model}")
+            except Exception as e:
+                messagebox.showerror("Save Error", f"Failed to save OpenAI model: {e}")
+        except Exception as e:
+            print(f"Save OpenAI model error: {e}")
 
     def _verify_openai_key(self):
         """Verify the OpenAI API key works by making a small test API call."""
@@ -7200,13 +7278,13 @@ class App:
             if response.status_code == 200:
                 globals()['OPENAI_API_KEY'] = key
                 if hasattr(self, 'log_to_console'):
-                    self.log_to_console("[OpenAI] ✓ API key is VALID - translations will use GPT-4o-mini")
+                    self.log_to_console(f"[OpenAI] ✓ API key is VALID - translations will use {globals().get('OPENAI_MODEL', 'gpt-4o-mini')}")
                     self.log_to_console("[OpenAI] NOTE: OpenAI is used ONLY for translation, NOT for voice generation (TTS)")
                     self.log_to_console("[OpenAI] NOTE: API usage is visible at https://platform.openai.com/usage")
                     self.log_to_console("[OpenAI] API calls do NOT appear on chat.openai.com (that is a different product)")
                 messagebox.showinfo("API Key Valid",
-                    "✓ Your OpenAI API key is working!\n\n"
-                    "• Translations will use GPT-4o-mini\n"
+                    f"✓ Your OpenAI API key is working!\n\n"
+                    f"• Translations will use {globals().get('OPENAI_MODEL', 'gpt-4o-mini')}\n"
                     "• Voice generation uses GenAI Pro (NOT OpenAI)\n\n"
                     "IMPORTANT: API calls do NOT appear on chat.openai.com.\n"
                     "Check your API usage at:\nhttps://platform.openai.com/usage")
