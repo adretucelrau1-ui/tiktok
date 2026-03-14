@@ -205,7 +205,7 @@ def translate_text(text, target_language='en', log=None):
 
 def _openai_translate_segments(segments, target_language='en', log=None):
     """
-    Translate caption segments using OpenAI GPT-4o-mini for natural,
+    Translate caption segments using OpenAI GPT-5.3 for natural,
     context-aware translations that avoid repetition.
     
     Sends all segments as numbered lines so the model can see full context
@@ -268,21 +268,18 @@ def _openai_translate_segments(segments, target_language='en', log=None):
         )
     else:
         system_prompt = (
-            f"You are a professional subtitle translator. Translate the following numbered lines to {lang_name}.\n"
-            f"REGULI IMPORTANTE:\n"
-            f"1. Returnează DOAR traducerile numerotate, una pe linie, în formatul: '1. text tradus'\n"
-            f"2. Folosește un limbaj natural și curgător — EVITĂ repetițiile. Dacă două linii consecutive spun lucruri similare, "
-            f"folosește pronume, 'la fel', 'de asemenea', 'și el/ea' etc. în loc să repeți cuvinte.\n"
-            f"   Exemplu: În loc de 'El avea 20 de ani' apoi 'Ea avea 20 de ani', "
-            f"traduce ca 'El avea 20 de ani' apoi 'Și ea la fel'.\n"
-            f"3. Poți adăuga cuvinte pentru ca povestea să aibă sens și logică — NU traduce cuvânt cu cuvânt.\n"
-            f"4. Păstrează traducerile concise — sunt subtitrări video cu timp limitat pe ecran.\n"
-            f"5. Păstrează sensul și tonul emoțional al originalului.\n"
-            f"6. Păstrează același număr de linii ca în original."
+            f"You are a professional translator.\n\n"
+            f"Rules:\n"
+            f"- Detect the source language automatically.\n"
+            f"- Translate the text into {lang_name}.\n"
+            f"- Use natural, fluent language (not word-for-word translation).\n"
+            f"- Keep the same number of lines as the original text.\n"
+            f"- Preserve numbering like \"1. 2. 3.\"\n"
+            f"- Return only the translated text."
         )
     
     if log:
-        log(f"[OpenAI TRANSLATE] Sending {len(segments)} segments to GPT-4o-mini for {lang_name} translation...")
+        log(f"[OpenAI TRANSLATE] Sending {len(segments)} segments to GPT-5.3 for {lang_name} translation...")
         if custom:
             log(f"[OpenAI TRANSLATE] Using CUSTOM prompt: {custom[:120]}{'...' if len(custom) > 120 else ''}")
         else:
@@ -299,8 +296,11 @@ def _openai_translate_segments(segments, target_language='en', log=None):
                     'Content-Type': 'application/json'
                 },
                 json={
-                    'model': 'gpt-4o-mini',
-                    'temperature': 0.3,
+                    'model': 'gpt-5.3',
+                    'temperature': 0.2,
+                    'top_p': 1,
+                    'frequency_penalty': 0,
+                    'presence_penalty': 0,
                     'messages': [
                         {'role': 'system', 'content': system_prompt},
                         {'role': 'user', 'content': numbered_text}
@@ -374,7 +374,7 @@ def translate_segments(segments, target_language='en', log=None):
     """
     Translate all caption segments to target language.
     
-    Uses OpenAI GPT-4o-mini when OPENAI_API_KEY is set for natural,
+    Uses OpenAI GPT-5.3 when OPENAI_API_KEY is set for natural,
     context-aware translations that avoid repetition.
     Falls back to googletrans batch translation (with ||| separator
     for context), then per-segment translation as last resort.
@@ -400,7 +400,7 @@ def translate_segments(segments, target_language='en', log=None):
     api_key = globals().get('OPENAI_API_KEY')
     if api_key and REQUESTS_AVAILABLE:
         if log:
-            log(f"[TRANSLATE] Using OpenAI GPT-4o-mini (API key: ...{api_key[-4:]})")
+            log(f"[TRANSLATE] Using OpenAI GPT-5.3 (API key: ...{api_key[-4:]})")
             log(f"[TRANSLATE] Check API usage at: https://platform.openai.com/usage")
         openai_results = _openai_translate_segments(segments, target_language, log=log)
         if openai_results:
@@ -411,7 +411,7 @@ def translate_segments(segments, target_language='en', log=None):
                 new_seg["text"] = openai_results[i]
                 translated.append(new_seg)
             if log:
-                log("[TRANSLATE] ✓ OpenAI GPT-4o-mini translation complete!")
+                log("[TRANSLATE] ✓ OpenAI GPT-5.3 translation complete!")
             return translated
         if log:
             log("[TRANSLATE] ⚠ OpenAI translation failed — falling back to googletrans...")
@@ -7195,13 +7195,13 @@ class App:
             if response.status_code == 200:
                 globals()['OPENAI_API_KEY'] = key
                 if hasattr(self, 'log'):
-                    self.log("[OpenAI] ✓ API key is VALID - translations will use GPT-4o-mini")
+                    self.log("[OpenAI] ✓ API key is VALID - translations will use GPT-5.3")
                     self.log("[OpenAI] NOTE: OpenAI is used ONLY for translation, NOT for voice generation (TTS)")
                     self.log("[OpenAI] NOTE: API usage is visible at https://platform.openai.com/usage")
                     self.log("[OpenAI] API calls do NOT appear on chat.openai.com (that is a different product)")
                 messagebox.showinfo("API Key Valid",
                     "✓ Your OpenAI API key is working!\n\n"
-                    "• Translations will use GPT-4o-mini\n"
+                    "• Translations will use GPT-5.3\n"
                     "• Voice generation uses GenAI Pro (NOT OpenAI)\n\n"
                     "IMPORTANT: API calls do NOT appear on chat.openai.com.\n"
                     "Check your API usage at:\nhttps://platform.openai.com/usage")
