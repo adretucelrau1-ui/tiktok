@@ -253,37 +253,32 @@ def _openai_translate_segments(segments, target_language='en', log=None):
     }
     lang_name = lang_names.get(target_language, target_language)
     
-    # Use custom prompt if set, otherwise use default
+    # System prompt: always use the professional translator rules
+    system_prompt = (
+        f"You are a professional translator.\n\n"
+        f"Rules:\n"
+        f"- Detect the source language automatically.\n"
+        f"- Translate the text into {lang_name}.\n"
+        f"- Use natural, fluent language (not word-for-word translation).\n"
+        f"- Keep the same number of lines as the original text.\n"
+        f"- Preserve numbering like \"1. 2. 3.\"\n"
+        f"- Return only the translated text."
+    )
+    
+    # User message: custom prompt (if set from UI) + numbered text to translate
     custom = globals().get('TRANSLATION_CUSTOM_PROMPT', '').strip()
     if custom:
         # Replace {language} placeholder with actual target language name
-        system_prompt = custom.replace('{language}', lang_name)
-        # Always append output format rules so OpenAI returns numbered lines
-        system_prompt += (
-            f"\n\nREGULI FORMAT IEȘIRE:\n"
-            f"1. Returnează DOAR traducerile numerotate, una pe linie, în formatul: '1. text tradus'\n"
-            f"2. Păstrează același număr de linii ca în original.\n"
-            f"3. Poți adăuga cuvinte pentru ca povestea să aibă sens și logică.\n"
-            f"4. NU traduce cuvânt cu cuvânt — folosește un limbaj natural și coerent."
-        )
+        user_content = custom.replace('{language}', lang_name) + "\n\n" + numbered_text
     else:
-        system_prompt = (
-            f"You are a professional translator.\n\n"
-            f"Rules:\n"
-            f"- Detect the source language automatically.\n"
-            f"- Translate the text into {lang_name}.\n"
-            f"- Use natural, fluent language (not word-for-word translation).\n"
-            f"- Keep the same number of lines as the original text.\n"
-            f"- Preserve numbering like \"1. 2. 3.\"\n"
-            f"- Return only the translated text."
-        )
+        user_content = numbered_text
     
     if log:
         log(f"[OpenAI TRANSLATE] Sending {len(segments)} segments to GPT-5.3 for {lang_name} translation...")
         if custom:
-            log(f"[OpenAI TRANSLATE] Using CUSTOM prompt: {custom[:120]}{'...' if len(custom) > 120 else ''}")
+            log(f"[OpenAI TRANSLATE] Using CUSTOM user prompt: {custom[:120]}{'...' if len(custom) > 120 else ''}")
         else:
-            log(f"[OpenAI TRANSLATE] Using default subtitle translator prompt")
+            log(f"[OpenAI TRANSLATE] Using default translator prompt")
     
     import time as _time
     max_retries = 3
@@ -303,7 +298,7 @@ def _openai_translate_segments(segments, target_language='en', log=None):
                     'presence_penalty': 0,
                     'messages': [
                         {'role': 'system', 'content': system_prompt},
-                        {'role': 'user', 'content': numbered_text}
+                        {'role': 'user', 'content': user_content}
                     ]
                 },
                 timeout=60
