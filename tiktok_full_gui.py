@@ -1422,8 +1422,8 @@ CROP_BOTTOM_RATIO = 0.35
 # If the width-scaled foreground would be shorter than this, it scales up more (zooms in, clips sides).
 MIN_FG_HEIGHT_RATIO = 0.35  # Foreground fills at least 35% of canvas height (672px on 1920px canvas)
 
-VOICE_GAIN = 5.0  # Default: 5.0x — applied as FFmpeg output volume (not in MoviePy, to prevent clipping)
-MUSIC_GAIN = 0.25  # Default: 0.25x quieter for subtle background music (applied in MoviePy for voice:music ratio)
+VOICE_GAIN = 1.5  # Default: 1.5x — slight boost for clear voice over music
+MUSIC_GAIN = 0.4  # Default: 0.4x — audible background music, not overwhelming
 
 def _gain_to_db_str(gain):
     """Convert linear gain multiplier to dB string (CapCut-style display)."""
@@ -1433,6 +1433,16 @@ def _gain_to_db_str(gain):
     if db >= 0:
         return f"+{db:.1f} dB"
     return f"{db:.1f} dB"
+
+def _gain_to_display(gain):
+    """Convert gain to human-friendly display: percentage + dB."""
+    if gain <= 0:
+        return "🔇 Mute"
+    pct = int(round(gain * 100))
+    db = 20.0 * math.log10(gain)
+    if db >= 0:
+        return f"{pct}%  (+{db:.1f} dB)"
+    return f"{pct}%  ({db:.1f} dB)"
 CAPTION_FONT_PREFERRED = "Bangers"
 CAPTION_FONT_SIZE = 56
 
@@ -6188,19 +6198,26 @@ class App:
         # --- Voice Volume Control ---
         ttk.Label(left_frame, text="Voice volume:").grid(row=row, column=0, sticky="e")
         self.voice_gain_var = tk.DoubleVar(value=VOICE_GAIN)
-        self.voice_gain_scale = tk.Scale(left_frame, from_=0.0, to=20.0, resolution=0.1, orient='horizontal', length=120, showvalue=0, variable=self.voice_gain_var, command=self.on_voice_gain_changed)
+        self.voice_gain_scale = tk.Scale(left_frame, from_=0.0, to=5.0, resolution=0.05, orient='horizontal', length=160, showvalue=0, variable=self.voice_gain_var, command=self.on_voice_gain_changed)
         self.voice_gain_scale.grid(row=row, column=1, padx=(6,0))
-        self.voice_gain_label = ttk.Label(left_frame, text=_gain_to_db_str(self.voice_gain_var.get()))
+        self.voice_gain_label = ttk.Label(left_frame, text=_gain_to_display(self.voice_gain_var.get()), width=22)
         self.voice_gain_label.grid(row=row, column=2, sticky='w', padx=(4,0))
         row += 1
 
         # --- Music Volume Control ---
         ttk.Label(left_frame, text="Music volume:").grid(row=row, column=0, sticky="e")
         self.music_gain_var = tk.DoubleVar(value=MUSIC_GAIN)
-        self.music_gain_scale = tk.Scale(left_frame, from_=0.0, to=5.0, resolution=0.05, orient='horizontal', length=120, showvalue=0, variable=self.music_gain_var, command=self.on_music_gain_changed)
+        self.music_gain_scale = tk.Scale(left_frame, from_=0.0, to=2.0, resolution=0.05, orient='horizontal', length=160, showvalue=0, variable=self.music_gain_var, command=self.on_music_gain_changed)
         self.music_gain_scale.grid(row=row, column=1, padx=(6,0))
-        self.music_gain_label = ttk.Label(left_frame, text=_gain_to_db_str(self.music_gain_var.get()))
+        self.music_gain_label = ttk.Label(left_frame, text=_gain_to_display(self.music_gain_var.get()), width=22)
         self.music_gain_label.grid(row=row, column=2, sticky='w', padx=(4,0))
+        row += 1
+
+        # --- Preview Mix Button ---
+        preview_frame = ttk.Frame(left_frame)
+        preview_frame.grid(row=row, column=0, columnspan=3, sticky="we", pady=(4, 0))
+        ttk.Button(preview_frame, text="🔊 Preview Mix", style='Bordered.TButton', command=self._preview_audio_mix).pack(side="left", padx=(4, 8))
+        ttk.Label(preview_frame, text="Listen to voice + music at current volumes", font=('Segoe UI', 8)).pack(side="left")
         row += 1
 
         ttk.Separator(left_frame).grid(row=row, column=0, columnspan=3, sticky="we", pady=8)
@@ -7103,25 +7120,268 @@ class App:
                 pass
 
     def on_voice_gain_changed(self, val):
-        """Callback when voice volume slider changes — displays dB like CapCut"""
+        """Callback when voice volume slider changes — displays percentage + dB"""
         try:
             gain = float(val)
             globals()['VOICE_GAIN'] = gain
             if hasattr(self, 'voice_gain_label') and self.voice_gain_label:
-                self.voice_gain_label.config(text=_gain_to_db_str(gain))
+                self.voice_gain_label.config(text=_gain_to_display(gain))
         except Exception:
             pass
 
     def on_music_gain_changed(self, val):
-        """Callback when music volume slider changes — displays dB like CapCut"""
+        """Callback when music volume slider changes — displays percentage + dB"""
         try:
             gain = float(val)
             globals()['MUSIC_GAIN'] = gain
             if hasattr(self, 'music_gain_label') and self.music_gain_label:
-                self.music_gain_label.config(text=_gain_to_db_str(gain))
+                self.music_gain_label.config(text=_gain_to_display(gain))
         except Exception:
             pass
     
+    def _preview_audio_mix(self):
+        """Preview voice + music mix at current volume levels using FFmpeg/ffplay."""
+        try:
+            voice_path = self.voice_var.get().strip() if hasattr(self, 'voice_var') else ""
+            music_path = self.music_var.get().strip() if hasattr(self, 'music_var') else ""
+
+            if not voice_path and not music_path:
+                messagebox.showwarning("No Audio", "Please select at least a voice or music file to preview.")
+                return
+
+            for p, label in [(voice_path, "Voice"), (music_path, "Music")]:
+                if p and not os.path.isfile(p):
+                    messagebox.showerror("File Not Found", f"{label} file not found:\n{p}")
+                    return
+
+            voice_gain = self.voice_gain_var.get()
+            music_gain = self.music_gain_var.get()
+
+            if hasattr(self, 'log_to_console'):
+                self.log_to_console(f"[PREVIEW] Generating audio preview (voice={voice_gain:.2f}x, music={music_gain:.2f}x)...")
+
+            # Build FFmpeg command to mix audio and pipe to ffplay
+            # Use first 15 seconds for quick preview
+            preview_duration = 15
+            tmp_dir = tempfile.gettempdir()
+            preview_path = os.path.join(tmp_dir, "_tiktok_preview_mix.wav")
+
+            # Clean up any old preview file
+            if os.path.exists(preview_path):
+                try:
+                    os.remove(preview_path)
+                except Exception:
+                    pass
+
+            if voice_path and music_path:
+                # Mix both: voice at voice_gain, music at music_gain
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", voice_path,
+                    "-i", music_path,
+                    "-t", str(preview_duration),
+                    "-filter_complex",
+                    f"[0:a]volume={voice_gain}[v];[1:a]volume={music_gain}[m];[v][m]amix=inputs=2:duration=shortest:normalize=0,alimiter=limit=0.95",
+                    "-ac", "2", "-ar", "44100",
+                    preview_path
+                ]
+            elif voice_path:
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", voice_path,
+                    "-t", str(preview_duration),
+                    "-af", f"volume={voice_gain}",
+                    "-ac", "2", "-ar", "44100",
+                    preview_path
+                ]
+            else:
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", music_path,
+                    "-t", str(preview_duration),
+                    "-af", f"volume={music_gain}",
+                    "-ac", "2", "-ar", "44100",
+                    preview_path
+                ]
+
+            def _run_preview():
+                try:
+                    # Generate mixed audio file
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                    if result.returncode != 0 or not os.path.isfile(preview_path):
+                        self.root.after(0, lambda: messagebox.showerror("Preview Error",
+                            f"FFmpeg failed to generate preview.\n\n{result.stderr[:500] if result.stderr else 'Unknown error'}"))
+                        return
+
+                    # Get actual duration of generated file
+                    dur_cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                               "-of", "default=noprint_wrappers=1:nokey=1", preview_path]
+                    dur_result = subprocess.run(dur_cmd, capture_output=True, text=True, timeout=10)
+                    try:
+                        actual_duration = float(dur_result.stdout.strip())
+                    except (ValueError, AttributeError):
+                        actual_duration = preview_duration
+
+                    if hasattr(self, 'log_to_console'):
+                        self.root.after(0, lambda: self.log_to_console(f"[PREVIEW] Playing {actual_duration:.1f}s audio preview..."))
+
+                    # Open preview playback window on main thread
+                    self.root.after(0, lambda: self._open_preview_player(preview_path, actual_duration))
+
+                except subprocess.TimeoutExpired:
+                    self.root.after(0, lambda: messagebox.showerror("Preview Error", "FFmpeg timed out generating the audio preview."))
+                except Exception as e:
+                    self.root.after(0, lambda: messagebox.showerror("Preview Error", f"Error: {e}"))
+
+            threading.Thread(target=_run_preview, daemon=True).start()
+
+        except Exception as e:
+            messagebox.showerror("Preview Error", f"Failed to start preview:\n{e}")
+
+    def _open_preview_player(self, audio_path, duration):
+        """Open a Toplevel window with a progress bar and stop button for audio preview."""
+        try:
+            # Kill any previous preview
+            if hasattr(self, '_preview_process') and self._preview_process:
+                try:
+                    self._preview_process.terminate()
+                    self._preview_process.wait(timeout=2)
+                except Exception:
+                    pass
+                self._preview_process = None
+            if hasattr(self, '_preview_window') and self._preview_window:
+                try:
+                    self._preview_window.destroy()
+                except Exception:
+                    pass
+
+            # Create playback window
+            win = tk.Toplevel(self.root)
+            win.title("🔊 Audio Preview")
+            win.geometry("420x140")
+            win.resizable(False, False)
+            win.attributes('-topmost', True)
+            self._preview_window = win
+
+            # Volume info
+            voice_gain = self.voice_gain_var.get()
+            music_gain = self.music_gain_var.get()
+            info_text = f"Voice: {_gain_to_display(voice_gain)}   |   Music: {_gain_to_display(music_gain)}"
+            ttk.Label(win, text=info_text, font=('Segoe UI', 9)).pack(pady=(10, 4))
+
+            # Progress bar
+            progress_var = tk.DoubleVar(value=0)
+            progress_bar = ttk.Progressbar(win, variable=progress_var, maximum=duration, length=380, mode='determinate')
+            progress_bar.pack(padx=20, pady=(4, 4))
+
+            # Time label
+            time_label = ttk.Label(win, text=f"0:00 / {int(duration)//60}:{int(duration)%60:02d}", font=('Segoe UI', 9))
+            time_label.pack()
+
+            # Stop button
+            btn_frame = ttk.Frame(win)
+            btn_frame.pack(pady=(6, 8))
+            stop_btn = ttk.Button(btn_frame, text="⏹ Stop", command=lambda: self._stop_preview(win))
+            stop_btn.pack()
+
+            # Start ffplay process
+            self._preview_uses_timer_only = False
+            play_cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", audio_path]
+            try:
+                self._preview_process = subprocess.Popen(play_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except FileNotFoundError:
+                # ffplay not available, try system default player
+                if hasattr(self, 'log_to_console'):
+                    self.log_to_console("[PREVIEW] ffplay not found, trying system player...")
+                try:
+                    if sys.platform == "win32":
+                        os.startfile(audio_path)
+                        self._preview_process = None
+                        self._preview_uses_timer_only = True
+                    elif sys.platform == "darwin":
+                        self._preview_process = subprocess.Popen(["afplay", audio_path])
+                    else:
+                        self._preview_process = subprocess.Popen(["xdg-open", audio_path])
+                except Exception as e:
+                    messagebox.showerror("Preview Error", f"No audio player available.\nInstall ffplay (part of FFmpeg) to use audio preview.\n\n{e}")
+                    win.destroy()
+                    return
+
+            self._preview_start_time = time.time()
+            self._preview_duration = duration
+
+            def _update_progress():
+                try:
+                    if not win.winfo_exists():
+                        return
+                    elapsed = time.time() - self._preview_start_time
+                    if elapsed > duration:
+                        elapsed = duration
+                    progress_var.set(elapsed)
+                    mins = int(elapsed) // 60
+                    secs = int(elapsed) % 60
+                    total_mins = int(duration) // 60
+                    total_secs = int(duration) % 60
+                    time_label.config(text=f"{mins}:{secs:02d} / {total_mins}:{total_secs:02d}")
+
+                    # Check if process still running
+                    proc = getattr(self, '_preview_process', None)
+                    timer_only = getattr(self, '_preview_uses_timer_only', False)
+                    if timer_only:
+                        # No process to poll — use elapsed time
+                        if elapsed >= duration:
+                            progress_var.set(duration)
+                            time_label.config(text=f"{total_mins}:{total_secs:02d} / {total_mins}:{total_secs:02d}")
+                            stop_btn.config(text="✓ Done")
+                            if hasattr(self, 'log_to_console'):
+                                self.log_to_console("[PREVIEW] Playback finished.")
+                            return
+                    elif proc and proc.poll() is not None:
+                        # Playback finished
+                        progress_var.set(duration)
+                        time_label.config(text=f"{total_mins}:{total_secs:02d} / {total_mins}:{total_secs:02d}")
+                        stop_btn.config(text="✓ Done")
+                        if hasattr(self, 'log_to_console'):
+                            self.log_to_console("[PREVIEW] Playback finished.")
+                        return
+
+                    win.after(200, _update_progress)
+                except Exception:
+                    pass
+
+            win.after(200, _update_progress)
+
+            # Handle window close
+            def _on_close():
+                self._stop_preview(win)
+            win.protocol("WM_DELETE_WINDOW", _on_close)
+
+        except Exception as e:
+            if hasattr(self, 'log_to_console'):
+                self.log_to_console(f"[PREVIEW] Error: {e}")
+
+    def _stop_preview(self, win=None):
+        """Stop audio preview playback and close the window."""
+        try:
+            proc = getattr(self, '_preview_process', None)
+            if proc and proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except Exception:
+                    pass
+            self._preview_process = None
+            if win:
+                try:
+                    win.destroy()
+                except Exception:
+                    pass
+            self._preview_window = None
+            if hasattr(self, 'log_to_console'):
+                self.log_to_console("[PREVIEW] Stopped.")
+        except Exception:
+            pass
+
     def on_translation_toggle(self):
         """Callback when translation checkbox is toggled"""
         try:
