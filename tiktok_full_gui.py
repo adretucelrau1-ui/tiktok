@@ -4686,23 +4686,26 @@ def adjust_video_speed(video_clip, audio_duration, log, max_change=2.0):
     log(f"Speed adjusted by factor {factor:.4f}. New duration: {adjusted.duration:.2f}s")
     return adjusted
 
-def make_music_match_duration(music_clip, target_duration, log):
+def make_music_match_duration(music_clip, target_duration, log, music_gain=None):
+    if music_gain is None:
+        music_gain = MUSIC_GAIN
+    log(f"[AUDIO] Applying music volume: {music_gain:.2f}x ({_gain_to_display(music_gain)})")
     if music_clip.duration <= 0.01:
         raise ValueError("Music clip invalid / durată zero.")
     if abs(music_clip.duration - target_duration) < 0.01:
-        return music_clip.volumex(MUSIC_GAIN).set_duration(target_duration)
+        return music_clip.volumex(music_gain).set_duration(target_duration)
     if music_clip.duration < target_duration:
         loops = int(np.ceil(target_duration / music_clip.duration))
         log(f"Music too short ({music_clip.duration:.2f}s). Looping {loops} times to reach {target_duration:.2f}s")
         looped = concatenate_audioclips([music_clip] * loops).subclip(0, target_duration)
-        return looped.volumex(MUSIC_GAIN)
+        return looped.volumex(music_gain)
     else:
         log(f"Music longer ({music_clip.duration:.2f}s). Trimming to {target_duration:.2f}s and applying fadeout {MUSIC_FADEOUT_SECONDS}s.")
         trimmed = music_clip.subclip(0, target_duration)
         trimmed = trimmed.fx(audio_fadeout, MUSIC_FADEOUT_SECONDS)
-        return trimmed.volumex(MUSIC_GAIN).set_duration(target_duration)
+        return trimmed.volumex(music_gain).set_duration(target_duration)
 
-def process_single_job(video_path, voice_path, music_path, requested_output_path, q, preferred_font=None, custom_top_ratio=None, custom_bottom_ratio=None, mirror_video=False, words_per_caption=2, use_4k=False, blur_radius=None, bg_scale_extra=None, dim_factor=None, effect_settings=None, use_ai_voice=None, target_language=None, translation_enabled=None, tts_language=None, silence_threshold_ms=300, caption_text_color=None, caption_stroke_color=None, caption_stroke_width=None, caption_font_size=None, caption_y_offset=None, pre_generated_voice=None):
+def process_single_job(video_path, voice_path, music_path, requested_output_path, q, preferred_font=None, custom_top_ratio=None, custom_bottom_ratio=None, mirror_video=False, words_per_caption=2, use_4k=False, blur_radius=None, bg_scale_extra=None, dim_factor=None, effect_settings=None, use_ai_voice=None, target_language=None, translation_enabled=None, tts_language=None, silence_threshold_ms=300, caption_text_color=None, caption_stroke_color=None, caption_stroke_width=None, caption_font_size=None, caption_y_offset=None, pre_generated_voice=None, voice_gain=None, music_gain=None):
     def log(s):
         q.put(str(s))
     def _check_stop():
@@ -4716,6 +4719,14 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
     # Log received crop parameters for debugging
     log(f"[DEBUG] Received custom_top_ratio: {custom_top_ratio}")
     log(f"[DEBUG] Received custom_bottom_ratio: {custom_bottom_ratio}")
+    
+    # Use explicit gain parameters if provided, otherwise fall back to globals
+    if voice_gain is None:
+        voice_gain = globals().get('VOICE_GAIN', 1.5)
+    if music_gain is None:
+        music_gain = globals().get('MUSIC_GAIN', 0.4)
+    log(f"[AUDIO] Voice gain: {voice_gain:.2f}x ({_gain_to_display(voice_gain)})")
+    log(f"[AUDIO] Music gain: {music_gain:.2f}x ({_gain_to_display(music_gain)})")
     
     # Set defaults for effects if not provided
     if blur_radius is None:
@@ -4870,8 +4881,8 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
         # Enhanced detailed logging - now that we have all values
         log("═══════════════ PROCESSING JOB ═══════════════")
         log(f"VIDEO: {os.path.basename(video_path)} ({orig_w}x{orig_h}, {original_clip.duration:.1f}s)")
-        log(f"VOICE: {os.path.basename(voice_path)} (volume: {VOICE_GAIN:.1f}x)")
-        log(f"MUSIC: {os.path.basename(music_path)} (volume: {MUSIC_GAIN:.2f}x)")
+        log(f"VOICE: {os.path.basename(voice_path)} (volume: {voice_gain:.2f}x, {_gain_to_display(voice_gain)})")
+        log(f"MUSIC: {os.path.basename(music_path)} (volume: {music_gain:.2f}x, {_gain_to_display(music_gain)})")
         
         # Font information
         font_info = "default"
@@ -4926,11 +4937,12 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
 
         # Handle audio based on whether we have a voice file
         if voice_path and os.path.exists(voice_path):
-            voice_clip = AudioFileClip(voice_path).volumex(VOICE_GAIN)
+            voice_clip = AudioFileClip(voice_path).volumex(voice_gain)
             music_clip = AudioFileClip(music_path)
             target_duration = voice_clip.duration
             log(f"Voice duration (target): {target_duration:.2f}s")
-            music_matched = make_music_match_duration(music_clip, target_duration, log)
+            log(f"[AUDIO] Applying voice volume: {voice_gain:.2f}x ({_gain_to_display(voice_gain)})")
+            music_matched = make_music_match_duration(music_clip, target_duration, log, music_gain=music_gain)
             mixed_audio = CompositeAudioClip([music_matched, voice_clip.set_start(0)]).set_duration(target_duration)
             
             synced_video = adjust_video_speed(fg_clip, mixed_audio.duration, log, max_change=2.0)
@@ -4958,7 +4970,7 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
             log("[NO VOICE] Using video duration as target")
             target_duration = fg_clip.duration
             music_clip = AudioFileClip(music_path)
-            music_matched = make_music_match_duration(music_clip, target_duration, log)
+            music_matched = make_music_match_duration(music_clip, target_duration, log, music_gain=music_gain)
             mixed_audio = music_matched.set_duration(target_duration)
             synced_video = fg_clip
             caption_segments = []
@@ -4994,14 +5006,14 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                     tts_duration = pre_generated_voice['tts_duration']
                     
                     # Load the pre-generated TTS audio
-                    tts_clip = AudioFileClip(compressed_tts_path).volumex(VOICE_GAIN)
+                    tts_clip = AudioFileClip(compressed_tts_path).volumex(voice_gain)
                     
                     log(f"[AI VOICE] TTS voice duration: {tts_duration:.2f}s")
                     log(f"[AI VOICE] Keeping TTS voice at original speed (natural sound)")
                     
                     # Adjust music to match TTS duration
                     log(f"[AI VOICE] Adjusting music to match TTS duration...")
-                    music_matched = make_music_match_duration(music_clip, tts_duration, log)
+                    music_matched = make_music_match_duration(music_clip, tts_duration, log, music_gain=music_gain)
                     
                     # Composite ONLY TTS + music
                     log(f"[AI VOICE] 🎬 Compositing audio tracks (TTS + Music only)...")
@@ -5095,7 +5107,7 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                                     log(f"[AI VOICE] Extended last caption from {last_caption_end:.2f}s to {tts_final_duration:.2f}s (full video duration)")
                             
                             # Load the silence-removed TTS audio
-                            tts_clip = AudioFileClip(compressed_tts_path).volumex(VOICE_GAIN)
+                            tts_clip = AudioFileClip(compressed_tts_path).volumex(voice_gain)
                             
                             # Use TTS duration as the new target - DO NOT speed up/slow down the voice
                             tts_duration = tts_clip.duration
@@ -5104,7 +5116,7 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                             
                             # Adjust music to match TTS duration
                             log(f"[AI VOICE] Adjusting music to match TTS duration...")
-                            music_matched = make_music_match_duration(music_clip, tts_duration, log)
+                            music_matched = make_music_match_duration(music_clip, tts_duration, log, music_gain=music_gain)
                             
                             # Composite ONLY TTS + music (no original voice to avoid duplicate audio)
                             log(f"[AI VOICE] 🎬 Compositing audio tracks (TTS + Music only)...")
@@ -5641,7 +5653,9 @@ def _run_video_job(job, job_index, total_jobs, q, pre_generated_voice=None):
                        caption_stroke_width=job.get("caption_stroke_width"),
                        caption_font_size=job.get("caption_font_size"),
                        caption_y_offset=job.get("caption_y_offset"),
-                       pre_generated_voice=pre_generated_voice)
+                       pre_generated_voice=pre_generated_voice,
+                       voice_gain=job.get("voice_gain"),
+                       music_gain=job.get("music_gain"))
     log(f"===== END JOB {job_index} =====\n")
 
 
@@ -8759,7 +8773,10 @@ class App:
                 "blur_overlay_y": self.blur_overlay_y_var.get(),
                 "blur_overlay_w": self.blur_overlay_w_var.get(),
                 "blur_overlay_h": self.blur_overlay_h_var.get(),
-                "blur_overlay_intensity": self.blur_overlay_intensity_var.get()
+                "blur_overlay_intensity": self.blur_overlay_intensity_var.get(),
+                # Audio volume settings (captured at job creation time)
+                "voice_gain": self.voice_gain_var.get(),
+                "music_gain": self.music_gain_var.get()
             }
             self.jobs.append(job)
             # Show complete job info in the display using helper
@@ -9017,7 +9034,10 @@ class App:
                    "blur_overlay_y": self.blur_overlay_y_var.get(),
                    "blur_overlay_w": self.blur_overlay_w_var.get(),
                    "blur_overlay_h": self.blur_overlay_h_var.get(),
-                   "blur_overlay_intensity": self.blur_overlay_intensity_var.get()}
+                   "blur_overlay_intensity": self.blur_overlay_intensity_var.get(),
+                   # Audio volume settings (captured at job creation time)
+                   "voice_gain": self.voice_gain_var.get(),
+                   "music_gain": self.music_gain_var.get()}
             q = self.q
             # Extract effect settings
             effect_settings = {
@@ -9039,7 +9059,7 @@ class App:
                 'blur_overlay_intensity': job.get("blur_overlay_intensity", 20)
             }
             # Run in background thread so GUI remains responsive
-            t = threading.Thread(target=process_single_job, args=(job["video"], job["voice"], job["music"], job["output"], q, job.get("font")), kwargs={"custom_top_ratio": job.get("custom_top_ratio"), "custom_bottom_ratio": job.get("custom_bottom_ratio"), "mirror_video": job.get("mirror_video", False), "words_per_caption": job.get("words_per_caption", 2), "use_4k": job.get("use_4k", False), "blur_radius": job.get("blur_radius"), "bg_scale_extra": job.get("bg_scale_extra"), "dim_factor": job.get("dim_factor"), "effect_settings": effect_settings, "use_ai_voice": job.get("use_ai_voice", False), "target_language": job.get("target_language", 'none'), "translation_enabled": job.get("translation_enabled", False), "tts_language": job.get("tts_language", 'en'), "caption_text_color": job.get("caption_text_color"), "caption_stroke_color": job.get("caption_stroke_color"), "caption_stroke_width": job.get("caption_stroke_width"), "caption_font_size": job.get("caption_font_size"), "caption_y_offset": job.get("caption_y_offset")}, daemon=True)
+            t = threading.Thread(target=process_single_job, args=(job["video"], job["voice"], job["music"], job["output"], q, job.get("font")), kwargs={"custom_top_ratio": job.get("custom_top_ratio"), "custom_bottom_ratio": job.get("custom_bottom_ratio"), "mirror_video": job.get("mirror_video", False), "words_per_caption": job.get("words_per_caption", 2), "use_4k": job.get("use_4k", False), "blur_radius": job.get("blur_radius"), "bg_scale_extra": job.get("bg_scale_extra"), "dim_factor": job.get("dim_factor"), "effect_settings": effect_settings, "use_ai_voice": job.get("use_ai_voice", False), "target_language": job.get("target_language", 'none'), "translation_enabled": job.get("translation_enabled", False), "tts_language": job.get("tts_language", 'en'), "caption_text_color": job.get("caption_text_color"), "caption_stroke_color": job.get("caption_stroke_color"), "caption_stroke_width": job.get("caption_stroke_width"), "caption_font_size": job.get("caption_font_size"), "caption_y_offset": job.get("caption_y_offset"), "voice_gain": job.get("voice_gain"), "music_gain": job.get("music_gain")}, daemon=True)
             t.start()
             try:
                 self.log_widget.config(state='normal')
@@ -9058,7 +9078,9 @@ class App:
         translation_enabled = self.translation_enabled_var.get()
         tts_language = self.tts_language_var.get()
         silence_threshold_ms = self.silence_threshold_var.get()
-        process_single_job(video, voice, music, output, self.q, custom_top_ratio=top_ratio, custom_bottom_ratio=bottom_ratio, words_per_caption=words_per_caption, use_ai_voice=use_ai_voice, target_language=target_language, translation_enabled=translation_enabled, tts_language=tts_language, silence_threshold_ms=silence_threshold_ms)
+        voice_gain_val = self.voice_gain_var.get()
+        music_gain_val = self.music_gain_var.get()
+        process_single_job(video, voice, music, output, self.q, custom_top_ratio=top_ratio, custom_bottom_ratio=bottom_ratio, words_per_caption=words_per_caption, use_ai_voice=use_ai_voice, target_language=target_language, translation_enabled=translation_enabled, tts_language=tts_language, silence_threshold_ms=silence_threshold_ms, voice_gain=voice_gain_val, music_gain=music_gain_val)
         self.q.put("[SINGLE_DONE]")
 
     def run_queue(self):
