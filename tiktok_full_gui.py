@@ -6214,10 +6214,10 @@ class App:
         row += 1
 
         # --- Preview Mix Button ---
-        preview_frame = ttk.Frame(left_frame)
-        preview_frame.grid(row=row, column=0, columnspan=3, sticky="we", pady=(4, 0))
-        ttk.Button(preview_frame, text="🔊 Preview Mix", style='Bordered.TButton', command=self._preview_audio_mix).pack(side="left", padx=(4, 8))
-        ttk.Label(preview_frame, text="Listen to voice + music at current volumes", font=('Segoe UI', 8)).pack(side="left")
+        audio_preview_frame = ttk.Frame(left_frame)
+        audio_preview_frame.grid(row=row, column=0, columnspan=3, sticky="we", pady=(4, 0))
+        ttk.Button(audio_preview_frame, text="🔊 Preview Mix", style='Bordered.TButton', command=self._preview_audio_mix).pack(side="left", padx=(4, 8))
+        ttk.Label(audio_preview_frame, text="Listen to voice + music at current volumes", font=('Segoe UI', 8)).pack(side="left")
         row += 1
 
         ttk.Separator(left_frame).grid(row=row, column=0, columnspan=3, sticky="we", pady=8)
