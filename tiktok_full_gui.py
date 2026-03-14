@@ -6198,7 +6198,7 @@ class App:
         # --- Voice Volume Control ---
         ttk.Label(left_frame, text="Voice volume:").grid(row=row, column=0, sticky="e")
         self.voice_gain_var = tk.DoubleVar(value=VOICE_GAIN)
-        self.voice_gain_scale = tk.Scale(left_frame, from_=0.0, to=5.0, resolution=0.05, orient='horizontal', length=160, showvalue=0, variable=self.voice_gain_var, command=self.on_voice_gain_changed)
+        self.voice_gain_scale = tk.Scale(left_frame, from_=0.0, to=3.0, resolution=0.01, orient='horizontal', length=200, showvalue=0, variable=self.voice_gain_var, command=self.on_voice_gain_changed)
         self.voice_gain_scale.grid(row=row, column=1, padx=(6,0))
         self.voice_gain_label = ttk.Label(left_frame, text=_gain_to_display(self.voice_gain_var.get()), width=22)
         self.voice_gain_label.grid(row=row, column=2, sticky='w', padx=(4,0))
@@ -6207,7 +6207,7 @@ class App:
         # --- Music Volume Control ---
         ttk.Label(left_frame, text="Music volume:").grid(row=row, column=0, sticky="e")
         self.music_gain_var = tk.DoubleVar(value=MUSIC_GAIN)
-        self.music_gain_scale = tk.Scale(left_frame, from_=0.0, to=2.0, resolution=0.05, orient='horizontal', length=160, showvalue=0, variable=self.music_gain_var, command=self.on_music_gain_changed)
+        self.music_gain_scale = tk.Scale(left_frame, from_=0.0, to=2.0, resolution=0.01, orient='horizontal', length=200, showvalue=0, variable=self.music_gain_var, command=self.on_music_gain_changed)
         self.music_gain_scale.grid(row=row, column=1, padx=(6,0))
         self.music_gain_label = ttk.Label(left_frame, text=_gain_to_display(self.music_gain_var.get()), width=22)
         self.music_gain_label.grid(row=row, column=2, sticky='w', padx=(4,0))
