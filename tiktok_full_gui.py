@@ -3126,6 +3126,64 @@ def _build_ffmpeg_effect_filters(effect_settings, log_fn=None):
     return ""
 
 
+def _generate_capcut_metadata():
+    """Generate CapCut/vicut-style metadata key-value pairs for MP4 export.
+
+    Returns a list of (key, value) tuples suitable for FFmpeg ``-metadata`` flags.
+    Each call produces unique random IDs so every exported video looks like a
+    distinct CapCut project.
+    """
+    import uuid
+    import random
+
+    video_id = str(uuid.uuid4())
+    music_ids = f"{uuid.uuid4()},{uuid.uuid4()}"
+    # Real CapCut effect IDs are 19-digit integers in the 7.3–7.5×10¹⁸ range
+    effect_id1 = str(random.randint(7300000000000000000, 7499999999999999999))
+    effect_id2 = str(random.randint(7300000000000000000, 7499999999999999999))
+
+    artwork = {
+        "data": {
+            "editType": "default",
+            "infoStickerId": "",
+            "is_ai_lyric": 0,
+            "is_aimusic_mv": 0,
+            "is_use_ai_image_generation": 0,
+            "is_use_ai_video_generation": 0,
+            "is_use_aimusic_bgm": 0,
+            "is_use_aimusic_vocal": 0,
+            "is_use_graph_chart": 0,
+            "is_use_jichuang_mode_in_ai_writer": 0,
+            "is_use_relight": 0,
+            "is_use_vc_sing_clone": 1,
+            "is_use_voice_clone": "0",
+            "motion_blur_cnt": 0,
+            "musicId": music_ids,
+            "os": "windows",
+            "product": "vicut",
+            "stickerId": "",
+            "videoEffectId": f"{effect_id1},{effect_id2}",
+            "videoId": video_id,
+            "videoParams": {
+                "be": 0, "ef": 2, "ft": 2, "ma": 0, "me": 0,
+                "mu": 0, "re": 0, "sp": 2, "st": 0, "te": 0,
+                "tx": 0, "v": 0, "vs": 47
+            }
+        },
+        "source_platform": "desktop",
+        "source_type": "vicut"
+    }
+
+    return [
+        ("Artwork", json.dumps(artwork, separators=(',', ':'))),
+        ("Hw", "1"),
+        ("Bitrate", "28000000"),
+        ("Maxrate", "0"),
+        ("Te_Is_Reencode", "1"),
+        ("Mp_4_Data_Incomplete", "false"),
+    ]
+
+
 def _export_with_ffmpeg_filters(bg_path, fg_path, caption_segments, audio_path, output_path, video_width, video_height, log_fn, effect_settings=None, mirror_video=False, target_duration=None, preferred_font=None, words_per_caption=2, text_color_rgba=None, stroke_color_rgba=None, stroke_width=None, font_size=None, blur_radius=None, dim_factor=None, bg_scale_extra=None, crop_top_ratio=None, crop_bottom_ratio=None, caption_y_offset=None, force_cpu=False):
     """
     Fast export using pure FFmpeg complex filters.
@@ -3897,9 +3955,16 @@ def _export_with_ffmpeg_filters(bg_path, fg_path, caption_segments, audio_path, 
                 "-threads", "0"
             ])
         
+        # Inject CapCut / vicut metadata so the file looks like a genuine
+        # CapCut desktop export when inspected with ExifTool or similar tools.
+        capcut_meta = _generate_capcut_metadata()
+        for meta_key, meta_val in capcut_meta:
+            cmd.extend(["-metadata", f"{meta_key}={meta_val}"])
+        log_fn(f"[EXPORT] ✓ CapCut metadata injected ({len(capcut_meta)} tags)")
+
         cmd.extend([
-            "-metadata", "comment=Footage shot on CapCut",
-            "-movflags", "+faststart",
+            "-movflags", "+faststart+use_metadata_tags",
+            "-brand", "isom",
             output_path
         ])
         
