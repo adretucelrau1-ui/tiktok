@@ -7103,13 +7103,23 @@ class App:
         try:
             enabled = self.translation_enabled_var.get()
             globals()['TRANSLATION_ENABLED'] = enabled
-            if enabled and not TRANSLATION_AVAILABLE:
-                messagebox.showwarning(
-                    "Translation Unavailable",
-                    "Translation library (googletrans) is not installed.\nPlease install it with: pip install googletrans==4.0.0rc1"
-                )
-                self.translation_enabled_var.set(False)
-                globals()['TRANSLATION_ENABLED'] = False
+            if enabled:
+                # Check if any translation backend is available
+                has_openai = bool(globals().get('OPENAI_API_KEY')) and REQUESTS_AVAILABLE
+                has_googletrans = TRANSLATION_AVAILABLE
+                if not has_openai and not has_googletrans:
+                    messagebox.showwarning(
+                        "Translation Unavailable",
+                        "No translation backend available.\n\n"
+                        "Option 1: Set an OpenAI API key (recommended)\n"
+                        "Option 2: Install googletrans: pip install googletrans==4.0.0rc1"
+                    )
+                    self.translation_enabled_var.set(False)
+                    globals()['TRANSLATION_ENABLED'] = False
+                elif has_openai and not has_googletrans:
+                    self.log("[Translation] ✓ Using OpenAI for translation (googletrans not installed)")
+                elif has_openai:
+                    self.log("[Translation] ✓ Using OpenAI for translation (primary)")
         except Exception as e:
             print(f"Translation toggle error: {e}")
     
