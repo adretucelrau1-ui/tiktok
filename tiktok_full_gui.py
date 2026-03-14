@@ -7697,11 +7697,11 @@ class App:
             # Cancel any pending debounced preview update
             pending = getattr(self, '_caption_pos_debounce_id', None)
             if pending is not None:
-                self.after_cancel(pending)
+                self.root.after_cancel(pending)
                 self._caption_pos_debounce_id = None
 
             # Schedule the heavy preview update after a short delay (debounce)
-            self._caption_pos_debounce_id = self.after(80, self._do_caption_position_update)
+            self._caption_pos_debounce_id = self.root.after(80, self._do_caption_position_update)
         except Exception:
             pass
 
@@ -7759,11 +7759,11 @@ class App:
             # Cancel any pending debounced preview update (shared with slider)
             pending = getattr(self, '_caption_pos_debounce_id', None)
             if pending is not None:
-                self.after_cancel(pending)
+                self.root.after_cancel(pending)
                 self._caption_pos_debounce_id = None
 
             # Schedule the heavy preview update after a short delay (debounce)
-            self._caption_pos_debounce_id = self.after(80, self._do_caption_position_update)
+            self._caption_pos_debounce_id = self.root.after(80, self._do_caption_position_update)
         except Exception:
             pass
 
@@ -7792,11 +7792,11 @@ class App:
             # Cancel any pending debounced preview update
             pending = getattr(self, '_font_size_debounce_id', None)
             if pending is not None:
-                self.after_cancel(pending)
+                self.root.after_cancel(pending)
                 self._font_size_debounce_id = None
 
             # Schedule the heavy preview update after a short delay (debounce)
-            self._font_size_debounce_id = self.after(80, self._do_font_size_preview_update)
+            self._font_size_debounce_id = self.root.after(80, self._do_font_size_preview_update)
         except Exception as e:
             try:
                 self.log_widget.config(state='normal')
