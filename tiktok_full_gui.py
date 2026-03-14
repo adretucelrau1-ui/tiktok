@@ -2079,7 +2079,7 @@ def reencode_with_libx264(input_path, output_path, log=None):
                    "-pix_fmt", "yuv420p", "-profile:v", "high"])
     else:
         cmd.extend(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", 
-                   "-pix_fmt", "yuv420p", "-profile:v", "high"])
+                   "-pix_fmt", "yuv420p", "-profile:v", "high", "-threads", "0"])
     
     cmd.extend(["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", output_path])
     
@@ -2135,7 +2135,7 @@ def pre_render_foreground_ffmpeg(input_path, out_path, crop_x, crop_y, crop_w, c
         vparams = ["-c:v", codec, "-rc", "constqp", "-qp", "22", "-b:v", "0", "-preset", "p1", "-multipass", "0"]
     else:
         codec = "libx264"
-        vparams = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "22"]  # Changed from veryfast to ultrafast
+        vparams = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "22", "-threads", "0"]  # Use all CPU cores
     
     cmd.extend(vparams + ["-pix_fmt", "yuv420p", out_path])
     
@@ -3617,11 +3617,13 @@ def _export_with_ffmpeg_filters(bg_path, fg_path, caption_segments, audio_path, 
             bg_cmd.extend(["-i", bg_path, "-an", "-vf", bg_vf])
         
         # Use NVENC for bg pre-render if available, else CPU ultrafast
-        # Background is blurred — use constqp with high QP for fastest encoding
+        # Background is blurred — use constqp with high QP for fastest encoding.
+        # Higher QP/CRF for the intermediate is safe because the heavy blur
+        # hides any quality difference, and the file is only consumed once.
         if use_gpu:
-            bg_cmd.extend(["-c:v", nvenc_codec, "-preset", "p1", "-rc", "constqp", "-qp", "30", "-b:v", "0", "-multipass", "0"])
+            bg_cmd.extend(["-c:v", nvenc_codec, "-preset", "p1", "-rc", "constqp", "-qp", "34", "-b:v", "0", "-multipass", "0"])
         else:
-            bg_cmd.extend(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-threads", "0"])
+            bg_cmd.extend(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "30", "-threads", "0"])
         
         # Limit bg to same duration as output
         bg_duration_limit = None
@@ -4329,9 +4331,9 @@ def compose_final_video_with_static_blurred_bg(video_clip, audio_clip, caption_s
             
             temp_dir = tempfile.mkdtemp(prefix="tiktok_ffmpeg_export_")
             
-            # Save audio to temp file
-            audio_temp_path = os.path.join(temp_dir, "audio.mp3")
-            audio_clip.write_audiofile(audio_temp_path, fps=44100, codec='mp3', verbose=False, logger=None)
+            # Save audio to temp file (WAV = instant write, no MP3 encoding overhead)
+            audio_temp_path = os.path.join(temp_dir, "audio.wav")
+            audio_clip.write_audiofile(audio_temp_path, fps=44100, codec='pcm_s16le', verbose=False, logger=None)
             log(f"[EXPORT] Audio saved to: {audio_temp_path}")
             
             # Get foreground video path - use pre-rendered path if available
