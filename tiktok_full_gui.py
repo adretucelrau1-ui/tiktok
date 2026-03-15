@@ -1223,12 +1223,32 @@ def remove_silence_from_audio(audio_path, output_path=None, log=None, min_silenc
         if log:
             log(f"[SILENCE] Found {len(nonsilent_ranges)} non-silent segments")
         
+        # Add padding around each non-silent range to avoid cutting word
+        # boundaries.  150 ms is enough to preserve soft consonant tails
+        # and the onset of the next word.
+        pad_ms = 150
+        audio_len = len(audio)
+        padded = []
+        for s, e in nonsilent_ranges:
+            padded.append((max(0, s - pad_ms), min(audio_len, e + pad_ms)))
+        
+        # Merge overlapping / adjacent ranges produced by the padding
+        merged = [padded[0]]
+        for s, e in padded[1:]:
+            if s <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+            else:
+                merged.append((s, e))
+        
+        if log:
+            log(f"[SILENCE] After padding & merge: {len(merged)} segments (pad={pad_ms}ms)")
+        
         # Concatenate all non-silent segments
         output_audio = AudioSegment.empty()
         silence_map = []
         new_position = 0
         
-        for i, (start_ms, end_ms) in enumerate(nonsilent_ranges):
+        for i, (start_ms, end_ms) in enumerate(merged):
             segment = audio[start_ms:end_ms]
             output_audio += segment
             
