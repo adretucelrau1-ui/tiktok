@@ -802,18 +802,33 @@ def generate_tts_with_genaipro(text, language='en', output_path=None, api_key=No
             if elapsed_seconds > 0 and elapsed_seconds % 1800 == 0 and log:
                 log(f"[GenAI Pro] ℹ️ Still waiting after {elapsed_seconds // 60} minutes. Will keep waiting until complete or error.")
             
-            status_response = requests.get(
-                'https://genaipro.vn/api/v1/labs/task',
-                headers=headers,
-                timeout=10
-            )
+            # Wrap individual status poll in try/except so network errors
+            # don't kill the entire wait loop
+            try:
+                status_response = requests.get(
+                    'https://genaipro.vn/api/v1/labs/task',
+                    headers=headers,
+                    timeout=60
+                )
+            except Exception as poll_err:
+                if log:
+                    log(f"[GenAI Pro] ⚠️ Network error during status check: {poll_err} — retrying...")
+                i += 1
+                continue
             
             if status_response.status_code != 200:
                 if log:
                     log(f"[GenAI Pro ERROR] Status check failed: {status_response.status_code}")
+                i += 1
                 continue
             
-            tasks = status_response.json()
+            try:
+                tasks = status_response.json()
+            except Exception:
+                if log:
+                    log("[GenAI Pro] ⚠️ Invalid JSON in status response — retrying...")
+                i += 1
+                continue
             
             # Find our task in the list
             our_task = None
@@ -882,22 +897,34 @@ def generate_tts_with_genaipro(text, language='en', output_path=None, api_key=No
                             log(f"[GenAI Pro ERROR] All available fields in task: {list(our_task.keys())}")
                         return None
                     
-                    # Step 3: Download the audio file
+                    # Step 3: Download the audio file (with retries)
                     if log:
                         log(f"[GenAI Pro] 📥 Downloading audio file from: {audio_url}")
                     
-                    audio_response = requests.get(audio_url, timeout=30)
+                    download_ok = False
+                    for dl_attempt in range(5):
+                        try:
+                            audio_response = requests.get(audio_url, timeout=600)
+                            if audio_response.status_code == 200:
+                                with open(output_path, 'wb') as f:
+                                    f.write(audio_response.content)
+                                download_ok = True
+                                break
+                            else:
+                                if log:
+                                    log(f"[GenAI Pro] ⚠️ Download attempt {dl_attempt+1}/5 failed: HTTP {audio_response.status_code}")
+                        except Exception as dl_err:
+                            if log:
+                                log(f"[GenAI Pro] ⚠️ Download attempt {dl_attempt+1}/5 error: {dl_err}")
+                        time.sleep(3)
                     
-                    if audio_response.status_code == 200:
-                        with open(output_path, 'wb') as f:
-                            f.write(audio_response.content)
-                        
+                    if download_ok:
                         if log:
                             log(f"[GenAI Pro] ✅ TTS generated successfully: {output_path}")
                         return output_path
                     else:
                         if log:
-                            log(f"[GenAI Pro ERROR] Failed to download audio: {audio_response.status_code}")
+                            log(f"[GenAI Pro ERROR] Failed to download audio after 5 attempts")
                         return None
                 
                 elif status in ['failed', 'error', 'cancelled', 'canceled']:
@@ -4279,8 +4306,8 @@ def compose_final_video_with_static_blurred_bg(video_clip, audio_clip, caption_s
             
             for group_data in groups_with_timing:
                 grp_text = group_data["text"]
-                # Strip commas and semicolons from captions
-                grp_text = grp_text.replace(",", "").replace(";", "")
+                # Strip punctuation from captions
+                grp_text = grp_text.replace(",", "").replace(";", "").replace(".", "").replace("!", "").replace("?", "").replace("…", "").replace(":", "")
                 # Apply caption case transformation
                 _ccase = globals().get('CAPTION_CASE', 'none')
                 if _ccase == 'upper':
