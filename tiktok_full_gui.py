@@ -1590,6 +1590,7 @@ CAPTION_RAISE = 420
 CAPTION_Y_OFFSET = 0  # Vertical offset in pixels (negative = move up, positive = move down)
 TEMPLATE_WORDS = {1: 1, 2: 2, 3: 3}
 CAPTION_TEMPLATE = 2  # 1, 2 sau 3 cuvinte pe rand
+CAPTION_CASE = "none"  # "none", "upper", "lower" – caption text case transform
 
 # Maximum captions for FFmpeg drawtext filters before switching to ASS subtitle file
 # (avoids command line length limits and improves performance with many captions)
@@ -4278,6 +4279,14 @@ def compose_final_video_with_static_blurred_bg(video_clip, audio_clip, caption_s
             
             for group_data in groups_with_timing:
                 grp_text = group_data["text"]
+                # Strip commas and semicolons from captions
+                grp_text = grp_text.replace(",", "").replace(";", "")
+                # Apply caption case transformation
+                _ccase = globals().get('CAPTION_CASE', 'none')
+                if _ccase == 'upper':
+                    grp_text = grp_text.upper()
+                elif _ccase == 'lower':
+                    grp_text = grp_text.lower()
                 g_start = group_data["start"]
                 g_dur = max(MIN_GROUP_DURATION, group_data["end"] - group_data["start"])
                 if g_start >= end_t:
@@ -6317,6 +6326,7 @@ class App:
         ttk.Button(model_frame, text="Set", style='Bordered.TButton', command=self._apply_openai_model, width=4).pack(side="left", padx=(4,0))
         ttk.Button(model_frame, text="Save", style='Bordered.TButton', command=self._save_openai_model, width=5).pack(side="left", padx=(4,0))
         self._block_widget_scroll(self.openai_model_combo)
+        self._register_lockable("openai_model", _lbl_model, self.openai_model_combo, is_combo_readonly=False)
         row += 1
 
         # Custom translation prompt (uses {language} placeholder for selected target language)
@@ -6444,7 +6454,8 @@ class App:
         ttk.Separator(left_frame).grid(row=row, column=0, columnspan=3, sticky="we", pady=6)
         row += 1
         
-        ttk.Label(left_frame, text="Silence Threshold (ms):").grid(row=row, column=0, sticky="e")
+        _lbl_silence = ttk.Label(left_frame, text="Silence Threshold (ms):")
+        _lbl_silence.grid(row=row, column=0, sticky="e")
         self.silence_threshold_var = tk.IntVar(value=300)
         silence_threshold_spinbox = ttk.Spinbox(
             left_frame, 
@@ -6456,10 +6467,12 @@ class App:
         )
         silence_threshold_spinbox.grid(row=row, column=1, sticky="w", padx=(6,0))
         ttk.Label(left_frame, text="(Gaps to remove from AI voice)").grid(row=row, column=2, sticky="w", padx=(3,0))
+        self._register_lockable("silence_threshold", _lbl_silence, silence_threshold_spinbox)
         row += 1
         
         # Words per caption control (CapCut-style)
-        ttk.Label(left_frame, text="Words per caption:").grid(row=row, column=0, sticky="e")
+        _lbl_wpc = ttk.Label(left_frame, text="Words per caption:")
+        _lbl_wpc.grid(row=row, column=0, sticky="e")
         self.words_per_caption_var = tk.IntVar(value=2)
         words_per_caption_spinbox = ttk.Spinbox(
             left_frame, 
@@ -6474,6 +6487,23 @@ class App:
         # Also bind to var changes for direct typing
         self.words_per_caption_var.trace_add('write', self.on_words_per_caption_changed)
         ttk.Label(left_frame, text="(1=single word, 2-3=groups)").grid(row=row, column=2, sticky="w", padx=(3,0))
+        self._register_lockable("words_per_caption", _lbl_wpc, words_per_caption_spinbox)
+        row += 1
+
+        # Caption case toggle buttons (UPPER / lower) — mutually exclusive
+        ttk.Label(left_frame, text="Caption case:").grid(row=row, column=0, sticky="e")
+        self.caption_case_var = tk.StringVar(value="none")
+        _case_frame = ttk.Frame(left_frame)
+        _case_frame.grid(row=row, column=1, columnspan=2, sticky="w", padx=(6,0))
+        self._btn_upper = ttk.Button(_case_frame, text="UPPER", width=7, style='Bordered.TButton',
+                                     command=lambda: self._set_caption_case("upper"))
+        self._btn_upper.pack(side="left", padx=(0, 4))
+        self._btn_lower = ttk.Button(_case_frame, text="lower", width=7, style='Bordered.TButton',
+                                     command=lambda: self._set_caption_case("lower"))
+        self._btn_lower.pack(side="left", padx=(0, 4))
+        self._btn_case_off = ttk.Button(_case_frame, text="Off", width=5, style='Bordered.TButton',
+                                        command=lambda: self._set_caption_case("none"))
+        self._btn_case_off.pack(side="left")
         row += 1
 
         ttk.Separator(left_frame).grid(row=row, column=0, columnspan=3, sticky="we", pady=8)
@@ -8381,6 +8411,24 @@ class App:
             except Exception:
                 pass
 
+    def _set_caption_case(self, mode, force=False):
+        """Set caption case mode: 'upper', 'lower', or 'none'. Mutually exclusive.
+        If force=True, skip the toggle-off logic (used when restoring from preset)."""
+        if not force and mode == self.caption_case_var.get():
+            mode = "none"  # clicking the active button turns it off
+        self.caption_case_var.set(mode)
+        globals()['CAPTION_CASE'] = mode
+        # Visual feedback – highlight active button
+        for btn, m in [(self._btn_upper, "upper"), (self._btn_lower, "lower"), (self._btn_case_off, "none")]:
+            try:
+                btn.state(['pressed'] if m == mode else ['!pressed'])
+            except Exception:
+                pass
+        try:
+            self.log_to_console(f"[CAPTION CASE] Set to: {mode}")
+        except Exception:
+            pass
+
     def on_template_selected(self, event=None):
         try:
             sel = (self.template_var.get() if hasattr(self, 'template_var') else '2 words').strip()
@@ -10013,6 +10061,7 @@ class App:
                 
                 # Caption settings
                 "words_per_caption": self.words_per_caption_var.get(),
+                "caption_case": self.caption_case_var.get() if hasattr(self, 'caption_case_var') else "none",
                 "caption_text_color": list(globals()['CAPTION_TEXT_COLOR']),
                 "caption_stroke_color": list(globals()['CAPTION_STROKE_COLOR']),
                 "caption_stroke_width": self.stroke_width_var.get(),
@@ -10125,6 +10174,11 @@ class App:
             
             # Apply caption settings
             self.words_per_caption_var.set(preset_data.get("words_per_caption", 2))
+            if hasattr(self, 'caption_case_var'):
+                _cc = preset_data.get("caption_case", "none")
+                self.caption_case_var.set(_cc)
+                globals()['CAPTION_CASE'] = _cc
+                self._set_caption_case(_cc, force=True)
             if "caption_text_color" in preset_data:
                 globals()['CAPTION_TEXT_COLOR'] = tuple(preset_data["caption_text_color"])
             if "caption_stroke_color" in preset_data:
@@ -10247,6 +10301,11 @@ class App:
             
             # Apply caption settings
             self.words_per_caption_var.set(preset_data.get("words_per_caption", 2))
+            if hasattr(self, 'caption_case_var'):
+                _cc = preset_data.get("caption_case", "none")
+                self.caption_case_var.set(_cc)
+                globals()['CAPTION_CASE'] = _cc
+                self._set_caption_case(_cc, force=True)
             if "caption_text_color" in preset_data:
                 globals()['CAPTION_TEXT_COLOR'] = tuple(preset_data["caption_text_color"])
             if "caption_stroke_color" in preset_data:
@@ -10348,6 +10407,8 @@ class App:
             
             # Reset caption settings
             self.words_per_caption_var.set(2)
+            if hasattr(self, 'caption_case_var'):
+                self._set_caption_case("none", force=True)
             globals()['CAPTION_TEXT_COLOR'] = (255, 255, 255, 255)
             globals()['CAPTION_STROKE_COLOR'] = (0, 0, 0, 150)
             self.stroke_width_var.set(max(1, int(CAPTION_FONT_SIZE * 0.05)))
