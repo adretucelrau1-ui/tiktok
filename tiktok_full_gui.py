@@ -5015,13 +5015,21 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                     translate_to=target_language if translation_enabled else None
                 )
             else:
-                log("[CAPTION] Deferring caption generation until after TTS voice is created...")
-                # Generate initial caption segments from original voice for TTS generation
-                caption_segments = transcribe_captions(
-                    voice_path, 
-                    log, 
-                    translate_to=target_language if translation_enabled else None
-                )
+                # AI voice is enabled — check if we already have a pre-generated voice
+                # with caption segments (from the batch parallel pipeline).  In that case
+                # there is NO need to load Whisper and transcribe again — the captions are
+                # already inside pre_generated_voice and will be applied at line ~5050.
+                if pre_generated_voice and pre_generated_voice.get('caption_segments'):
+                    log("[CAPTION] ⚡ Pre-generated voice includes captions — skipping Whisper transcription")
+                    caption_segments = pre_generated_voice['caption_segments']
+                else:
+                    log("[CAPTION] Deferring caption generation until after TTS voice is created...")
+                    # Generate initial caption segments from original voice for TTS generation
+                    caption_segments = transcribe_captions(
+                        voice_path, 
+                        log, 
+                        translate_to=target_language if translation_enabled else None
+                    )
         else:
             # No voice file - use video duration as target
             log("[NO VOICE] Using video duration as target")
