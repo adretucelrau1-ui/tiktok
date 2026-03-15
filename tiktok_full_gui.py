@@ -7842,10 +7842,15 @@ class App:
                             # Update the voice ID map
                             self.voice_id_map[voice_name] = voice_id
             
-            # Update the combobox
+            # Update the combobox – preserve current selection if still valid
             self.tts_voice_combo['values'] = voices
-            self.tts_voice_var.set('Auto (Default)')  # Reset to auto
-            globals()['TTS_VOICE_ID'] = 'auto'
+            current = self.tts_voice_var.get()
+            if current not in voices:
+                self.tts_voice_var.set('Auto (Default)')
+                globals()['TTS_VOICE_ID'] = 'auto'
+            else:
+                # Re-sync the global in case it was stale
+                globals()['TTS_VOICE_ID'] = self.voice_id_map.get(current, 'auto')
             
             print(f"[Voice Dropdown] Updated for {language}: {len(voices)} voices available")
         except Exception as e:
@@ -10169,7 +10174,11 @@ class App:
                     globals()['OPENAI_API_KEY'] = saved_key
             self.use_ai_voice_var.set(preset_data.get("use_ai_voice", USE_AI_VOICE_REPLACEMENT))
             self.tts_language_var.set(preset_data.get("tts_language", TTS_LANGUAGE))
-            self.tts_voice_var.set(preset_data.get("tts_voice", 'Auto (Default)'))
+            # Rebuild dropdown for language first, then restore selected voice + sync global
+            self.update_voice_dropdown(preset_data.get("tts_language", TTS_LANGUAGE))
+            saved_voice = preset_data.get("tts_voice", 'Auto (Default)')
+            self.tts_voice_var.set(saved_voice)
+            globals()['TTS_VOICE_ID'] = self.voice_id_map.get(saved_voice, 'auto')
             self.silence_threshold_var.set(preset_data.get("silence_threshold", 300))
             
             # Apply caption settings
@@ -10296,7 +10305,11 @@ class App:
                     globals()['OPENAI_API_KEY'] = saved_key
             self.use_ai_voice_var.set(preset_data.get("use_ai_voice", USE_AI_VOICE_REPLACEMENT))
             self.tts_language_var.set(preset_data.get("tts_language", TTS_LANGUAGE))
-            self.tts_voice_var.set(preset_data.get("tts_voice", 'Auto (Default)'))
+            # Rebuild dropdown for language first, then restore selected voice + sync global
+            self.update_voice_dropdown(preset_data.get("tts_language", TTS_LANGUAGE))
+            saved_voice = preset_data.get("tts_voice", 'Auto (Default)')
+            self.tts_voice_var.set(saved_voice)
+            globals()['TTS_VOICE_ID'] = self.voice_id_map.get(saved_voice, 'auto')
             self.silence_threshold_var.set(preset_data.get("silence_threshold", 300))
             
             # Apply caption settings
