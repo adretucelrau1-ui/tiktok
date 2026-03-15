@@ -749,7 +749,7 @@ def generate_tts_with_genaipro(text, language='en', output_path=None, api_key=No
             'input': text,
             'voice_id': voice_id,
             'model_id': 'eleven_turbo_v2_5',  # Fast model
-            'speed': 1.0,
+            'speed': globals().get('TTS_SPEED', 1.0),
             'style': 0.0,
             'use_speaker_boost': False,
             'similarity': 0.75,
@@ -1004,7 +1004,7 @@ def _submit_genaipro_task(text, language='en', api_key=None, log=None):
             'input': text,
             'voice_id': voice_id,
             'model_id': 'eleven_turbo_v2_5',
-            'speed': 1.0,
+            'speed': globals().get('TTS_SPEED', 1.0),
             'style': 0.0,
             'use_speaker_boost': False,
             'similarity': 0.75,
@@ -1471,6 +1471,7 @@ MIN_FG_HEIGHT_RATIO = 0.35  # Foreground fills at least 35% of canvas height (67
 
 VOICE_GAIN = 1.5  # Default: 1.5x — slight boost for clear voice over music
 MUSIC_GAIN = 0.4  # Default: 0.4x — audible background music, not overwhelming
+TTS_SPEED = 1.0   # Default TTS speed multiplier (0.5–2.0, 1.0 = normal)
 
 def _gain_to_db_str(gain):
     """Convert linear gain multiplier to dB string (CapCut-style display)."""
@@ -6275,7 +6276,7 @@ class App:
         _lbl_voice = ttk.Label(left_frame, text="Voice volume:")
         _lbl_voice.grid(row=row, column=0, sticky="e")
         self.voice_gain_var = tk.DoubleVar(value=VOICE_GAIN)
-        self.voice_gain_scale = tk.Scale(left_frame, from_=0.0, to=3.0, resolution=0.01, orient='horizontal', length=200, showvalue=0, variable=self.voice_gain_var, command=self.on_voice_gain_changed)
+        self.voice_gain_scale = tk.Scale(left_frame, from_=0.0, to=5.0, resolution=0.01, orient='horizontal', length=200, showvalue=0, variable=self.voice_gain_var, command=self.on_voice_gain_changed)
         self.voice_gain_scale.grid(row=row, column=1, padx=(6,0))
         self.voice_gain_label = ttk.Label(left_frame, text=_gain_to_display(self.voice_gain_var.get()), width=22)
         self.voice_gain_label.grid(row=row, column=2, sticky='w', padx=(4,0))
@@ -6535,6 +6536,17 @@ class App:
         self.words_per_caption_var.trace_add('write', self.on_words_per_caption_changed)
         ttk.Label(left_frame, text="(1=single word, 2-3=groups)").grid(row=row, column=2, sticky="w", padx=(3,0))
         self._register_lockable("words_per_caption", _lbl_wpc, words_per_caption_spinbox)
+        row += 1
+
+        # --- TTS Voice Speed Control ---
+        _lbl_speed = ttk.Label(left_frame, text="TTS speed:")
+        _lbl_speed.grid(row=row, column=0, sticky="e")
+        self.tts_speed_var = tk.DoubleVar(value=TTS_SPEED)
+        self.tts_speed_scale = tk.Scale(left_frame, from_=0.5, to=2.0, resolution=0.05, orient='horizontal', length=200, showvalue=0, variable=self.tts_speed_var, command=self.on_tts_speed_changed)
+        self.tts_speed_scale.grid(row=row, column=1, padx=(6,0))
+        self.tts_speed_label = ttk.Label(left_frame, text=f"{TTS_SPEED:.2f}x", width=22)
+        self.tts_speed_label.grid(row=row, column=2, sticky='w', padx=(4,0))
+        self._register_lockable("tts_speed", _lbl_speed, self.tts_speed_scale)
         row += 1
 
         # Caption case toggle buttons (UPPER / lower) — mutually exclusive
@@ -7275,6 +7287,16 @@ class App:
             globals()['MUSIC_GAIN'] = gain
             if hasattr(self, 'music_gain_label') and self.music_gain_label:
                 self.music_gain_label.config(text=_gain_to_display(gain))
+        except Exception:
+            pass
+
+    def on_tts_speed_changed(self, val):
+        """Callback when TTS speed slider changes — displays speed multiplier"""
+        try:
+            speed = float(val)
+            globals()['TTS_SPEED'] = speed
+            if hasattr(self, 'tts_speed_label') and self.tts_speed_label:
+                self.tts_speed_label.config(text=f"{speed:.2f}x")
         except Exception:
             pass
 
@@ -10110,6 +10132,7 @@ class App:
                 "tts_language": self.tts_language_var.get(),
                 "tts_voice": self.tts_voice_var.get(),
                 "silence_threshold": self.silence_threshold_var.get(),
+                "tts_speed": self.tts_speed_var.get() if hasattr(self, 'tts_speed_var') else 1.0,
                 
                 # Caption settings
                 "words_per_caption": self.words_per_caption_var.get(),
@@ -10227,6 +10250,9 @@ class App:
             self.tts_voice_var.set(saved_voice)
             globals()['TTS_VOICE_ID'] = self.voice_id_map.get(saved_voice, 'auto')
             self.silence_threshold_var.set(preset_data.get("silence_threshold", 300))
+            if hasattr(self, 'tts_speed_var'):
+                self.tts_speed_var.set(preset_data.get("tts_speed", TTS_SPEED))
+                self.on_tts_speed_changed(str(self.tts_speed_var.get()))
             
             # Apply caption settings
             self.words_per_caption_var.set(preset_data.get("words_per_caption", 2))
@@ -10358,6 +10384,9 @@ class App:
             self.tts_voice_var.set(saved_voice)
             globals()['TTS_VOICE_ID'] = self.voice_id_map.get(saved_voice, 'auto')
             self.silence_threshold_var.set(preset_data.get("silence_threshold", 300))
+            if hasattr(self, 'tts_speed_var'):
+                self.tts_speed_var.set(preset_data.get("tts_speed", TTS_SPEED))
+                self.on_tts_speed_changed(str(self.tts_speed_var.get()))
             
             # Apply caption settings
             self.words_per_caption_var.set(preset_data.get("words_per_caption", 2))
@@ -10464,6 +10493,9 @@ class App:
             self.tts_language_var.set(TTS_LANGUAGE)
             self.tts_voice_var.set('Auto (Default)')
             self.silence_threshold_var.set(300)
+            if hasattr(self, 'tts_speed_var'):
+                self.tts_speed_var.set(TTS_SPEED)
+                self.on_tts_speed_changed(str(TTS_SPEED))
             
             # Reset caption settings
             self.words_per_caption_var.set(2)
