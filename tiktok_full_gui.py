@@ -288,8 +288,8 @@ def _openai_translate_segments(segments, target_language='en', log=None):
     import time as _time
     import re
     max_retries = 5
-    # Backoff schedule: 5s, 10s, 20s, 30s, 60s — total ~125s to outlast 60s rate-limit windows
-    backoff_schedule = [5, 10, 20, 30, 60]
+    # Backoff schedule: 10s, 20s, 40s, 60s, 120s — total ~250s to outlast per-minute rate-limit windows
+    backoff_schedule = [10, 20, 40, 60, 120]
     retryable_status_codes = {429, 500, 502, 503, 504}
     
     for attempt in range(max_retries):
@@ -311,7 +311,7 @@ def _openai_translate_segments(segments, target_language='en', log=None):
                         {'role': 'user', 'content': user_content}
                     ]
                 },
-                timeout=60
+                timeout=120
             )
             
             if response.status_code in retryable_status_codes:
@@ -5590,13 +5590,26 @@ def _submit_voice_for_job(job, job_index, total_jobs, q):
                 log(f"[VOICE SUBMIT {job_index}/{total_jobs}] ❌ Audio extraction failed: {e}")
                 return None
 
-        # Step 2: Transcribe original audio
+        # Step 2: Transcribe original audio (GPU) then translate (CPU/network separately)
+        # Split into two steps so we can release the Whisper model (~3GB GPU) before
+        # potentially long OpenAI translation retries (which are CPU/network only).
+        # This prevents 99% GPU usage during translation timeouts.
         log(f"[VOICE SUBMIT {job_index}/{total_jobs}] 📝 Transcribing audio...")
         caption_segments = transcribe_captions(
             actual_voice_path,
             log,
-            translate_to=target_language if translation_enabled else None
+            translate_to=None  # Translate separately after releasing GPU
         )
+
+        # Release Whisper model to free ~3GB GPU memory before translation.
+        # Translation is CPU/network only and can take minutes if OpenAI rate-limits.
+        # The model will be reloaded on next transcribe_captions() call if needed.
+        _release_whisper_model(log=log)
+
+        # Now translate if needed (no GPU required)
+        if translation_enabled and target_language and target_language != 'none' and caption_segments:
+            log(f"[VOICE SUBMIT {job_index}/{total_jobs}] 🌐 Translating to {target_language}...")
+            caption_segments = translate_segments(caption_segments, target_language=target_language, log=log)
 
         if not caption_segments:
             log(f"[VOICE SUBMIT {job_index}/{total_jobs}] ⚠️ No transcription results")
