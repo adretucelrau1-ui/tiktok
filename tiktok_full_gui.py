@@ -192,11 +192,16 @@ def translate_text(text, target_language='en', log=None):
         return text
     
     try:
-        translator = Translator()
+        try:
+            translator = Translator(timeout=15)
+        except TypeError:
+            translator = Translator()
         result = translator.translate(text, dest=target_language)
-        if log:
-            log(f"[TRANSLATE] '{text[:50]}...' -> '{result.text[:50]}...' ({target_language})")
-        return result.text
+        if result and result.text:
+            if log:
+                log(f"[TRANSLATE] '{text[:50]}...' -> '{result.text[:50]}...' ({target_language})")
+            return result.text
+        return text
     except Exception as e:
         if log:
             log(f"[TRANSLATE ERROR] Failed to translate: {e}")
@@ -424,7 +429,10 @@ def translate_segments(segments, target_language='en', log=None):
         texts = [seg.get("text", "").strip() for seg in segments]
         batch_text = " ||| ".join(texts)
         
-        translator = Translator()
+        try:
+            translator = Translator(timeout=15)
+        except TypeError:
+            translator = Translator()
         result = translator.translate(batch_text, dest=target_language)
         
         if result and result.text:
@@ -442,12 +450,16 @@ def translate_segments(segments, target_language='en', log=None):
             else:
                 if log:
                     log(f"[TRANSLATE] Batch split mismatch ({len(parts)} vs {len(segments)}), falling back to per-segment")
+        else:
+            if log:
+                log("[TRANSLATE] Batch translation returned empty result, falling back to per-segment")
     except Exception as e:
         if log:
             log(f"[TRANSLATE] Batch translation failed ({e}), falling back to per-segment")
     
     # --- Strategy 3: Per-segment fallback ---
     translated = []
+    fail_count = 0
     for i, seg in enumerate(segments):
         try:
             original_text = seg.get("text", "")
@@ -457,13 +469,33 @@ def translate_segments(segments, target_language='en', log=None):
             new_seg["text"] = translated_text
             new_seg["original_text"] = original_text
             translated.append(new_seg)
+            
+            # Track when translation returns the same text (likely failed silently)
+            if translated_text == original_text and original_text.strip():
+                fail_count += 1
+            else:
+                fail_count = 0  # Reset on success
         except Exception as e:
+            fail_count += 1
             if log:
                 log(f"[TRANSLATE ERROR] Failed segment {i}: {e}")
             translated.append(seg)
+        
+        # If too many segments fail in a row, stop trying (googletrans is broken)
+        if fail_count >= 3:
+            if log:
+                log(f"[TRANSLATE] ⚠️ {fail_count} consecutive failures — googletrans appears broken, keeping remaining segments untranslated")
+            for remaining_seg in segments[i+1:]:
+                new_seg = remaining_seg.copy()
+                new_seg["original_text"] = remaining_seg.get("text", "")
+                translated.append(new_seg)
+            break
     
     if log:
-        log(f"[TRANSLATE] Translation complete!")
+        if fail_count > 0:
+            log(f"[TRANSLATE] Translation complete with {fail_count} failed segment(s) (kept original text)")
+        else:
+            log(f"[TRANSLATE] Translation complete!")
     
     return _reduce_translation_repetition(translated, log=log)
 
@@ -5019,9 +5051,11 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                 # with caption segments (from the batch parallel pipeline).  In that case
                 # there is NO need to load Whisper and transcribe again — the captions are
                 # already inside pre_generated_voice and will be applied at line ~5050.
-                if pre_generated_voice and pre_generated_voice.get('caption_segments'):
+                if pre_generated_voice and 'caption_segments' in pre_generated_voice:
                     log("[CAPTION] ⚡ Pre-generated voice includes captions — skipping Whisper transcription")
                     caption_segments = pre_generated_voice['caption_segments']
+                    if not caption_segments:
+                        log("[CAPTION] ⚠️ Pre-generated captions list is empty (Whisper found no words in TTS audio)")
                 else:
                     log("[CAPTION] Deferring caption generation until after TTS voice is created...")
                     # Generate initial caption segments from original voice for TTS generation
@@ -5030,6 +5064,9 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                         log, 
                         translate_to=target_language if translation_enabled else None
                     )
+                    # Release Whisper model immediately after transcription to free GPU memory
+                    # for the NVENC video encoding that follows
+                    _release_whisper_model(log=log)
         else:
             # No voice file - use video duration as target
             log("[NO VOICE] Using video duration as target")
@@ -5155,6 +5192,9 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                             )
                             log(f"[AI VOICE] ✓ Generated {len(caption_segments)} caption segments with perfect timing")
                             log("")
+                            
+                            # Release Whisper model to free GPU memory for NVENC video encoding
+                            _release_whisper_model(log=log)
                             
                             # No need for timestamp remapping - captions already match the compressed audio!
                             
