@@ -286,7 +286,12 @@ def _openai_translate_segments(segments, target_language='en', log=None):
             log(f"[OpenAI TRANSLATE] Using default translator prompt")
     
     import time as _time
-    max_retries = 3
+    import re
+    max_retries = 5
+    # Backoff schedule: 5s, 10s, 20s, 30s, 60s — total ~125s to outlast 60s rate-limit windows
+    backoff_schedule = [5, 10, 20, 30, 60]
+    retryable_status_codes = {429, 500, 502, 503, 504}
+    
     for attempt in range(max_retries):
         try:
             response = _requests.post(
@@ -309,11 +314,19 @@ def _openai_translate_segments(segments, target_language='en', log=None):
                 timeout=60
             )
             
-            if response.status_code == 429:
-                wait = 2 ** attempt
+            if response.status_code in retryable_status_codes:
+                # Respect Retry-After header if present, otherwise use backoff schedule
+                retry_after = response.headers.get('Retry-After')
+                if retry_after:
+                    try:
+                        wait = min(int(retry_after), 120)
+                    except (ValueError, TypeError):
+                        wait = backoff_schedule[min(attempt, len(backoff_schedule) - 1)]
+                else:
+                    wait = backoff_schedule[min(attempt, len(backoff_schedule) - 1)]
                 if log:
-                    log(f"[OpenAI TRANSLATE] Rate limited (429). Retry {attempt+1}/{max_retries} in {wait}s...")
-                    if attempt == 0:
+                    log(f"[OpenAI TRANSLATE] HTTP {response.status_code} — retry {attempt+1}/{max_retries} in {wait}s...")
+                    if response.status_code == 429 and attempt == 0:
                         log("[OpenAI TRANSLATE] TIP: If this persists, add billing credit at https://platform.openai.com/settings/organization/billing")
                 _time.sleep(wait)
                 continue
@@ -330,13 +343,12 @@ def _openai_translate_segments(segments, target_language='en', log=None):
             result_lines = reply.split('\n')
             translated_texts = [''] * len(segments)
             
-            import re
             for line in result_lines:
                 line = line.strip()
                 if not line:
                     continue
-                # Match "1. text" or "1) text" or just "1 text"
-                m = re.match(r'^(\d+)[.\)]\s*(.*)', line)
+                # Match "1. text", "1) text", "1: text", "1- text", or "1 text"
+                m = re.match(r'^(\d+)[.\)\:\-]?\s+(.*)', line)
                 if m:
                     idx = int(m.group(1)) - 1  # Convert 1-based to 0-based
                     if 0 <= idx < len(segments):
@@ -344,6 +356,19 @@ def _openai_translate_segments(segments, target_language='en', log=None):
             
             # Verify we got translations for most segments
             filled = sum(1 for t in translated_texts if t)
+            
+            # Fallback: if numbered parsing failed, try plain line-by-line mapping
+            if filled < len(segments) * 0.5:
+                non_empty_lines = [l.strip() for l in result_lines if l.strip()]
+                if len(non_empty_lines) == len(segments):
+                    if log:
+                        log(f"[OpenAI TRANSLATE] Numbered parsing got {filled}/{len(segments)}, using line-by-line mapping instead")
+                    for i, line in enumerate(non_empty_lines):
+                        # Strip any leading numbering from the line
+                        cleaned = re.sub(r'^(\d+)[.\)\:\-]?\s*', '', line).strip()
+                        translated_texts[i] = cleaned if cleaned else line.strip()
+                    filled = sum(1 for t in translated_texts if t)
+            
             if filled < len(segments) * 0.5:
                 if log:
                     log(f"[OpenAI TRANSLATE WARNING] Only {filled}/{len(segments)} lines parsed, falling back")
@@ -359,12 +384,19 @@ def _openai_translate_segments(segments, target_language='en', log=None):
             
             return translated_texts
             
+        except (_requests.exceptions.Timeout, _requests.exceptions.ConnectionError) as e:
+            # Network errors are retryable
+            wait = backoff_schedule[min(attempt, len(backoff_schedule) - 1)]
+            if log:
+                log(f"[OpenAI TRANSLATE] Network error: {e} — retry {attempt+1}/{max_retries} in {wait}s...")
+            _time.sleep(wait)
+            continue
         except Exception as e:
             if log:
                 log(f"[OpenAI TRANSLATE ERROR] {e}")
             return None
     
-    # All retries exhausted (429 on every attempt)
+    # All retries exhausted
     if log:
         log("[OpenAI TRANSLATE ERROR] All retries failed (rate limited). Add billing credit at https://platform.openai.com/settings/organization/billing")
     return None
