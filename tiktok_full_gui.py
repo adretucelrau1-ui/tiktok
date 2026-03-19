@@ -458,11 +458,13 @@ def _remap_words_to_timing(translated_text, retranscribed_words):
     if len(new_words) > 1:
         total_start = new_words[0]['start']
         total_end = new_words[-1]['end']
-        n = len(new_words)
-        slot = (total_end - total_start) / n
-        for i in range(n):
-            new_words[i]['start'] = total_start + i * slot
-            new_words[i]['end'] = total_start + (i + 1) * slot
+        duration = total_end - total_start
+        if duration > 0:
+            n = len(new_words)
+            slot = duration / n
+            for i in range(n):
+                new_words[i]['start'] = total_start + i * slot
+                new_words[i]['end'] = total_start + (i + 1) * slot
     return new_words
 
 
