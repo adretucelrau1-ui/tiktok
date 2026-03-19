@@ -2385,6 +2385,7 @@ def _load_whisper_model_with_retries(model_name="large-v3", tries=3, log=None):
                 sys.modules.pop(mod_name, None)
             if _torch_attempt == 1:
                 raise RuntimeError(f"PyTorch failed to import: {_tie}") from _tie
+            time.sleep(0.5)  # brief delay before retry to allow transient issues to clear
     try:
         import whisper  # lazy import — heavy module, only loaded when transcription is needed
     except (ImportError, OSError) as _wie:
