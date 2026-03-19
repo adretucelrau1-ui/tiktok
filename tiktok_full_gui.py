@@ -5327,37 +5327,52 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                             # can display each caption group at the exact moment the TTS voice
                             # speaks the corresponding portion.
                             if translated_caption_segments and caption_segments:
+                                # Gather ALL translated text and ALL re-transcription words
+                                all_translated_text = " ".join(
+                                    seg.get('text', '') for seg in translated_caption_segments
+                                ).strip()
+                                all_retrans_words = []
+                                seg_word_counts = []
+                                for seg in caption_segments:
+                                    sw = seg.get('words', [])
+                                    all_retrans_words.extend(sw)
+                                    seg_word_counts.append(len(sw))
+                                # Map translated text onto re-transcription word timestamps
+                                remapped = _remap_words_to_timing(all_translated_text, all_retrans_words) if all_retrans_words and all_translated_text else None
+                                if remapped:
+                                    w_idx = 0
+                                    for seg, wc in zip(caption_segments, seg_word_counts):
+                                        seg_words = remapped[w_idx:w_idx + wc] if wc > 0 else []
+                                        if seg_words:
+                                            seg['words'] = seg_words
+                                            seg['text'] = " ".join(w['word'] for w in seg_words)
+                                        else:
+                                            seg.pop('words', None)
+                                        w_idx += wc
+                                    log(f"[AI VOICE] ✓ Mapped translated text onto {len(all_retrans_words)} word timestamps across {len(caption_segments)} segments")
+                                else:
+                                    # No word-level data — update text only, use segment timing
+                                    if len(caption_segments) == len(translated_caption_segments):
+                                        for re_seg, orig_seg in zip(caption_segments, translated_caption_segments):
+                                            re_seg['text'] = orig_seg.get('text', re_seg.get('text', ''))
+                                            re_seg.pop('words', None)
+                                    else:
+                                        tw = all_translated_text.split()
+                                        n_s = len(caption_segments)
+                                        bps = len(tw) // n_s if n_s else 0
+                                        rem = len(tw) % n_s if n_s else 0
+                                        wi = 0
+                                        for j, seg in enumerate(caption_segments):
+                                            c = bps + (1 if j < rem else 0)
+                                            seg['text'] = ' '.join(tw[wi:wi + c])
+                                            seg.pop('words', None)
+                                            wi += c
+                                    log(f"[AI VOICE] ⚠ No word timestamps — using segment-level timing for {len(caption_segments)} segments")
+                                # Copy original_text where possible
                                 if len(caption_segments) == len(translated_caption_segments):
                                     for re_seg, orig_seg in zip(caption_segments, translated_caption_segments):
-                                        translated_text = orig_seg.get('text', re_seg.get('text', ''))
-                                        re_seg['text'] = translated_text
-                                        # Remap translated words onto re-transcription's
-                                        # word-level timestamps for precise caption-voice sync
-                                        remapped = _remap_words_to_timing(translated_text, re_seg.get('words', []))
-                                        if remapped:
-                                            re_seg['words'] = remapped
-                                        else:
-                                            re_seg.pop('words', None)
                                         if 'original_text' in orig_seg:
                                             re_seg['original_text'] = orig_seg['original_text']
-                                    log(f"[AI VOICE] ✓ Mapped translated text to {len(caption_segments)} re-timed segments (1:1)")
-                                else:
-                                    log(f"[AI VOICE] ⚠ Segment count changed ({len(translated_caption_segments)} → {len(caption_segments)}) — redistributing translated text")
-                                    all_translated_words = []
-                                    for seg in translated_caption_segments:
-                                        all_translated_words.extend(seg.get('text', '').split())
-                                    if all_translated_words:
-                                        total_words = len(all_translated_words)
-                                        n_segs = len(caption_segments)
-                                        base_per_seg = total_words // n_segs
-                                        remainder = total_words % n_segs
-                                        word_idx = 0
-                                        for i, seg in enumerate(caption_segments):
-                                            count = base_per_seg + (1 if i < remainder else 0)
-                                            seg['text'] = ' '.join(all_translated_words[word_idx:word_idx + count])
-                                            seg.pop('words', None)
-                                            word_idx += count
-                                        log(f"[AI VOICE] ✓ Distributed {total_words} translated words across {n_segs} re-timed segments")
                             elif translated_caption_segments and not caption_segments:
                                 log("[AI VOICE] ⚠ Re-transcription empty — using original translated segments")
                                 caption_segments = translated_caption_segments
@@ -5869,40 +5884,52 @@ def _complete_voice_for_job(submission, job_index, total_jobs, q):
         # speaks the corresponding portion.
         original_translated = submission.get('caption_segments', [])
         if original_translated and final_caption_segments:
+            # Gather ALL translated text and ALL re-transcription words
+            all_translated_text = " ".join(
+                seg.get('text', '') for seg in original_translated
+            ).strip()
+            all_retrans_words = []
+            seg_word_counts = []
+            for seg in final_caption_segments:
+                sw = seg.get('words', [])
+                all_retrans_words.extend(sw)
+                seg_word_counts.append(len(sw))
+            # Map translated text onto re-transcription word timestamps
+            remapped = _remap_words_to_timing(all_translated_text, all_retrans_words) if all_retrans_words and all_translated_text else None
+            if remapped:
+                w_idx = 0
+                for seg, wc in zip(final_caption_segments, seg_word_counts):
+                    seg_words = remapped[w_idx:w_idx + wc] if wc > 0 else []
+                    if seg_words:
+                        seg['words'] = seg_words
+                        seg['text'] = " ".join(w['word'] for w in seg_words)
+                    else:
+                        seg.pop('words', None)
+                    w_idx += wc
+                log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Mapped translated text onto {len(all_retrans_words)} word timestamps across {len(final_caption_segments)} segments")
+            else:
+                # No word-level data — update text only, use segment timing
+                if len(final_caption_segments) == len(original_translated):
+                    for re_seg, orig_seg in zip(final_caption_segments, original_translated):
+                        re_seg['text'] = orig_seg.get('text', re_seg.get('text', ''))
+                        re_seg.pop('words', None)
+                else:
+                    tw = all_translated_text.split()
+                    n_s = len(final_caption_segments)
+                    bps = len(tw) // n_s if n_s else 0
+                    rem = len(tw) % n_s if n_s else 0
+                    wi = 0
+                    for j, seg in enumerate(final_caption_segments):
+                        c = bps + (1 if j < rem else 0)
+                        seg['text'] = ' '.join(tw[wi:wi + c])
+                        seg.pop('words', None)
+                        wi += c
+                log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ⚠ No word timestamps — using segment-level timing for {len(final_caption_segments)} segments")
+            # Copy original_text where possible
             if len(final_caption_segments) == len(original_translated):
                 for re_seg, orig_seg in zip(final_caption_segments, original_translated):
-                    translated_text = orig_seg.get('text', re_seg.get('text', ''))
-                    re_seg['text'] = translated_text
-                    # Remap translated words onto re-transcription's
-                    # word-level timestamps for precise caption-voice sync
-                    remapped = _remap_words_to_timing(translated_text, re_seg.get('words', []))
-                    if remapped:
-                        re_seg['words'] = remapped
-                    else:
-                        re_seg.pop('words', None)
                     if 'original_text' in orig_seg:
                         re_seg['original_text'] = orig_seg['original_text']
-                log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Mapped translated text to {len(final_caption_segments)} re-timed segments (1:1)")
-            else:
-                log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ⚠ Segment count changed ({len(original_translated)} translated → {len(final_caption_segments)} re-transcribed) — redistributing translated text")
-                # Segment counts differ: merge all translated text and redistribute
-                # across the re-transcribed timing for correct caption display
-                all_translated_words = []
-                for seg in original_translated:
-                    seg_words = seg.get('text', '').split()
-                    all_translated_words.extend(seg_words)
-                if all_translated_words:
-                    total_words = len(all_translated_words)
-                    n_segs = len(final_caption_segments)
-                    base_per_seg = total_words // n_segs
-                    remainder = total_words % n_segs
-                    word_idx = 0
-                    for i, seg in enumerate(final_caption_segments):
-                        count = base_per_seg + (1 if i < remainder else 0)
-                        seg['text'] = ' '.join(all_translated_words[word_idx:word_idx + count])
-                        seg.pop('words', None)
-                        word_idx += count
-                    log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Distributed {total_words} translated words across {n_segs} re-timed segments")
         elif original_translated and not final_caption_segments:
             # Re-transcription produced nothing — fall back to original translated segments
             log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ⚠ Re-transcription empty — using original translated segments")
