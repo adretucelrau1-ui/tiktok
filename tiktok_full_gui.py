@@ -450,6 +450,19 @@ def _remap_words_to_timing(translated_text, retranscribed_words):
                 'start': retranscribed_words[t_idx].get('start', 0),
                 'end': retranscribed_words[t_next].get('end', 0),
             })
+    # Enforce strict non-overlapping word timings.  The spreading algorithm
+    # above can produce overlapping intervals when there are more translated
+    # words than timing slots (multiple words map to the same or adjacent
+    # slots).  Distribute the total time span evenly across all words so
+    # that caption groups built from consecutive words never overlap.
+    if len(new_words) > 1:
+        total_start = new_words[0]['start']
+        total_end = new_words[-1]['end']
+        n = len(new_words)
+        slot = (total_end - total_start) / n
+        for i in range(n):
+            new_words[i]['start'] = total_start + i * slot
+            new_words[i]['end'] = total_start + (i + 1) * slot
     return new_words
 
 
@@ -4507,12 +4520,23 @@ def compose_final_video_with_static_blurred_bg(video_clip, audio_clip, caption_s
             continue
     
     # Prevent overlapping captions: clamp each caption's end before next caption's start.
-    # Use a small gap (10ms) to ensure no frame shows both captions simultaneously,
-    # even with ASS centisecond truncation or drawtext inclusive-end timing.
+    # Use a 30ms gap to ensure no frame shows both captions simultaneously,
+    # accounting for ASS centisecond truncation and video frame boundaries.
+    CAPTION_GAP = 0.03
     for i in range(len(caption_data_for_ffmpeg) - 1):
         next_start = caption_data_for_ffmpeg[i + 1]['start']
-        if caption_data_for_ffmpeg[i]['end'] > next_start - 0.01:
-            caption_data_for_ffmpeg[i]['end'] = max(caption_data_for_ffmpeg[i]['start'], next_start - 0.01)
+        if caption_data_for_ffmpeg[i]['end'] > next_start - CAPTION_GAP:
+            caption_data_for_ffmpeg[i]['end'] = max(
+                caption_data_for_ffmpeg[i]['start'],
+                next_start - CAPTION_GAP,
+            )
+    # Remove captions that ended up with near-zero duration after clamping
+    # (they would flash for a single frame and overlap visually).
+    MIN_VISIBLE_DURATION = 0.05
+    caption_data_for_ffmpeg = [
+        c for c in caption_data_for_ffmpeg
+        if c['end'] - c['start'] >= MIN_VISIBLE_DURATION
+    ]
     
     try:
         log(f"[COMPOSE] ═══════════════════════════════════════════════")
