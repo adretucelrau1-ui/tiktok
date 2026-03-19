@@ -402,6 +402,57 @@ def _openai_translate_segments(segments, target_language='en', log=None):
     return None
 
 
+def _remap_words_to_timing(translated_text, retranscribed_words):
+    """Map translated text onto re-transcription word timestamps.
+
+    When TTS audio is re-transcribed by Whisper, the resulting word
+    timestamps precisely match the TTS speech cadence. This function
+    distributes the (correctly translated) text across those timestamps
+    so that compose can display each caption group at the exact moment
+    the TTS voice speaks the corresponding portion.
+
+    Returns a new list of ``{'word', 'start', 'end'}`` dicts, or *None*
+    if word-level mapping is not possible (empty inputs).
+    """
+    if not retranscribed_words or not translated_text or not translated_text.strip():
+        return None
+    trans_words = translated_text.split()
+    n_trans = len(trans_words)
+    n_timing = len(retranscribed_words)
+    if n_trans == 0 or n_timing == 0:
+        return None
+    new_words = []
+    if n_trans == n_timing:
+        # Perfect 1:1 word count — direct mapping
+        for tw, rw in zip(trans_words, retranscribed_words):
+            new_words.append({'word': tw, 'start': rw.get('start', 0), 'end': rw.get('end', 0)})
+    elif n_trans < n_timing:
+        # Fewer translated words than timing slots — merge adjacent slots
+        ratio = n_timing / n_trans
+        for i in range(n_trans):
+            s_idx = int(i * ratio)
+            e_idx = min(int((i + 1) * ratio) - 1, n_timing - 1)
+            e_idx = max(e_idx, s_idx)
+            new_words.append({
+                'word': trans_words[i],
+                'start': retranscribed_words[s_idx].get('start', 0),
+                'end': retranscribed_words[e_idx].get('end', 0),
+            })
+    else:
+        # More translated words than timing slots — spread across available slots
+        ratio = n_timing / n_trans
+        for i in range(n_trans):
+            t_idx = min(int(i * ratio), n_timing - 1)
+            t_next = min(int((i + 1) * ratio), n_timing - 1)
+            t_next = max(t_next, t_idx)
+            new_words.append({
+                'word': trans_words[i],
+                'start': retranscribed_words[t_idx].get('start', 0),
+                'end': retranscribed_words[t_next].get('end', 0),
+            })
+    return new_words
+
+
 def translate_segments(segments, target_language='en', log=None):
     """
     Translate all caption segments to target language.
@@ -5271,16 +5322,22 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                             # Whisper re-transcription gives perfect timing but may auto-detect
                             # the wrong language, producing source-language text instead of the
                             # target-language translation. Map the original translated text
-                            # onto the re-timed segments.
-                            # IMPORTANT: Also clear 'words' (word-level data) because the compose
-                            # function uses words[i]['word'] for caption text when 'words' exists,
-                            # completely ignoring 'text'. Without clearing, untranslated word-level
-                            # data would override the correct translated text in captions.
+                            # onto the re-timed segments.  We keep re-transcription's word-level
+                            # timestamps and remap the translated text onto them so that compose
+                            # can display each caption group at the exact moment the TTS voice
+                            # speaks the corresponding portion.
                             if translated_caption_segments and caption_segments:
                                 if len(caption_segments) == len(translated_caption_segments):
                                     for re_seg, orig_seg in zip(caption_segments, translated_caption_segments):
-                                        re_seg['text'] = orig_seg.get('text', re_seg.get('text', ''))
-                                        re_seg.pop('words', None)
+                                        translated_text = orig_seg.get('text', re_seg.get('text', ''))
+                                        re_seg['text'] = translated_text
+                                        # Remap translated words onto re-transcription's
+                                        # word-level timestamps for precise caption-voice sync
+                                        remapped = _remap_words_to_timing(translated_text, re_seg.get('words', []))
+                                        if remapped:
+                                            re_seg['words'] = remapped
+                                        else:
+                                            re_seg.pop('words', None)
                                         if 'original_text' in orig_seg:
                                             re_seg['original_text'] = orig_seg['original_text']
                                     log(f"[AI VOICE] ✓ Mapped translated text to {len(caption_segments)} re-timed segments (1:1)")
@@ -5807,16 +5864,22 @@ def _complete_voice_for_job(submission, job_index, total_jobs, q):
         # but Whisper may auto-detect the wrong language and produce source-language text
         # instead of the target-language text. The caption_segments from _submit_voice_for_job()
         # contain the correct OpenAI/googletrans translated text — map it onto re-timed segments.
-        # IMPORTANT: Also clear 'words' (word-level data) because the compose function uses
-        # words[i]['word'] for caption text when 'words' exists, completely ignoring 'text'.
-        # Without clearing, untranslated word-level data would override the correct translated
-        # text in captions.
+        # We keep re-transcription's word-level timestamps and remap the translated text onto
+        # them so that compose can display each caption group at the exact moment the TTS voice
+        # speaks the corresponding portion.
         original_translated = submission.get('caption_segments', [])
         if original_translated and final_caption_segments:
             if len(final_caption_segments) == len(original_translated):
                 for re_seg, orig_seg in zip(final_caption_segments, original_translated):
-                    re_seg['text'] = orig_seg.get('text', re_seg.get('text', ''))
-                    re_seg.pop('words', None)
+                    translated_text = orig_seg.get('text', re_seg.get('text', ''))
+                    re_seg['text'] = translated_text
+                    # Remap translated words onto re-transcription's
+                    # word-level timestamps for precise caption-voice sync
+                    remapped = _remap_words_to_timing(translated_text, re_seg.get('words', []))
+                    if remapped:
+                        re_seg['words'] = remapped
+                    else:
+                        re_seg.pop('words', None)
                     if 'original_text' in orig_seg:
                         re_seg['original_text'] = orig_seg['original_text']
                 log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Mapped translated text to {len(final_caption_segments)} re-timed segments (1:1)")
