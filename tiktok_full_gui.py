@@ -439,6 +439,7 @@ def translate_segments(segments, target_language='en', log=None):
             translated = []
             for i, seg in enumerate(segments):
                 new_seg = seg.copy()
+                new_seg.pop('words', None)  # Remove untranslated word-level data
                 new_seg["original_text"] = seg.get("text", "")
                 new_seg["text"] = openai_results[i]
                 translated.append(new_seg)
@@ -473,6 +474,7 @@ def translate_segments(segments, target_language='en', log=None):
                 translated = []
                 for i, seg in enumerate(segments):
                     new_seg = seg.copy()
+                    new_seg.pop('words', None)  # Remove untranslated word-level data
                     new_seg["original_text"] = seg.get("text", "")
                     new_seg["text"] = parts[i].strip()
                     translated.append(new_seg)
@@ -498,6 +500,7 @@ def translate_segments(segments, target_language='en', log=None):
             translated_text = translate_text(original_text, target_language, log=None)
             
             new_seg = seg.copy()
+            new_seg.pop('words', None)  # Remove untranslated word-level data
             new_seg["text"] = translated_text
             new_seg["original_text"] = original_text
             translated.append(new_seg)
@@ -519,6 +522,7 @@ def translate_segments(segments, target_language='en', log=None):
                 log(f"[TRANSLATE] ⚠️ {fail_count} consecutive failures — googletrans appears broken, keeping remaining segments untranslated")
             for remaining_seg in segments[i+1:]:
                 new_seg = remaining_seg.copy()
+                new_seg.pop('words', None)  # Remove untranslated word-level data
                 new_seg["original_text"] = remaining_seg.get("text", "")
                 translated.append(new_seg)
             break
@@ -5952,34 +5956,48 @@ def queue_worker(jobs, q):
     
     def _submitter():
         """Background thread: submit voices one by one, start completion immediately."""
-        for idx in range(total):
-            job = jobs[idx]
+        try:
+            for idx in range(total):
+                try:
+                    job = jobs[idx]
+                    
+                    if not job.get("use_ai_voice", False):
+                        # No AI voice — mark as immediately ready
+                        log(f"[QUEUE] Job {idx+1}/{total}: no AI voice — ready immediately")
+                        voice_done_events[idx].set()
+                        any_voice_ready.set()
+                        continue
+                    
+                    log(f"\n[QUEUE] 📤 Submitting voice {idx+1}/{total}...")
+                    sub = _submit_voice_for_job(job, idx + 1, total, q)
+                    
+                    if sub is None:
+                        # Submission failed — mark as ready (will process without pre-gen voice)
+                        voice_done_events[idx].set()
+                        any_voice_ready.set()
+                    else:
+                        # Start completion thread IMMEDIATELY (polls GenAI while we submit next job)
+                        t = threading.Thread(target=_completion_worker, args=(idx, sub))
+                        with completion_threads_lock:
+                            completion_threads.append(t)
+                        t.start()
+                        log(f"[QUEUE] ✓ Job {idx+1} completion thread started — moving to next")
+                except Exception as e:
+                    log(f"[QUEUE] ❌ Unexpected error submitting job {idx+1}: {e}")
+                    voice_done_events[idx].set()
+                    any_voice_ready.set()
             
-            if not job.get("use_ai_voice", False):
-                # No AI voice — mark as immediately ready
-                log(f"[QUEUE] Job {idx+1}/{total}: no AI voice — ready immediately")
-                voice_done_events[idx].set()
-                any_voice_ready.set()
-                continue
-            
-            log(f"\n[QUEUE] 📤 Submitting voice {idx+1}/{total}...")
-            sub = _submit_voice_for_job(job, idx + 1, total, q)
-            
-            if sub is None:
-                # Submission failed — mark as ready (will process without pre-gen voice)
-                voice_done_events[idx].set()
-                any_voice_ready.set()
-            else:
-                # Start completion thread IMMEDIATELY (polls GenAI while we submit next job)
-                t = threading.Thread(target=_completion_worker, args=(idx, sub))
-                with completion_threads_lock:
-                    completion_threads.append(t)
-                t.start()
-                log(f"[QUEUE] ✓ Job {idx+1} completion thread started — moving to next")
-        
-        log(f"\n[QUEUE] ═══ ALL {total} VOICES SUBMITTED ═══")
-        # Release Whisper model after all submissions to free GPU memory during voice waiting
-        _release_whisper_model(log=log)
+            log(f"\n[QUEUE] ═══ ALL {total} VOICES SUBMITTED ═══")
+        except Exception as e:
+            log(f"[QUEUE] ❌ Submitter thread error: {e}")
+            # Mark all remaining unset jobs as ready so the main loop doesn't hang
+            for idx in range(total):
+                if not voice_done_events[idx].is_set():
+                    voice_done_events[idx].set()
+                    any_voice_ready.set()
+        finally:
+            # Release Whisper model after all submissions to free GPU memory during voice waiting
+            _release_whisper_model(log=log)
     
     # Start submitter in background — submissions happen while videos process
     submitter_thread = threading.Thread(target=_submitter)
