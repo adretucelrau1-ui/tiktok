@@ -4536,13 +4536,23 @@ def compose_final_video_with_static_blurred_bg(video_clip, audio_clip, caption_s
                 caption_data_for_ffmpeg[i]['start'],
                 next_start - CAPTION_GAP,
             )
-    # Remove captions that ended up with near-zero duration after clamping
-    # (they would flash for a single frame and overlap visually).
+    # Merge captions that ended up with near-zero duration after clamping
+    # into adjacent captions instead of removing them.  This preserves all
+    # spoken text (preventing words from disappearing) while still avoiding
+    # the visual flicker of a sub-frame caption.
     MIN_VISIBLE_DURATION = 0.05
-    caption_data_for_ffmpeg = [
-        c for c in caption_data_for_ffmpeg
-        if c['end'] - c['start'] >= MIN_VISIBLE_DURATION
-    ]
+    _merged_captions = []
+    for _c in caption_data_for_ffmpeg:
+        if _c['end'] - _c['start'] >= MIN_VISIBLE_DURATION:
+            _merged_captions.append(_c)
+        elif _merged_captions:
+            # Too short — merge text into previous caption and extend its end
+            _merged_captions[-1]['text'] += ' ' + _c['text']
+            _merged_captions[-1]['end'] = max(_merged_captions[-1]['end'], _c['end'])
+        elif _c['text'].strip():
+            # First caption is too short — keep it so text is not lost
+            _merged_captions.append(_c)
+    caption_data_for_ffmpeg = _merged_captions
     
     try:
         log(f"[COMPOSE] ═══════════════════════════════════════════════")
