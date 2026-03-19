@@ -450,12 +450,12 @@ def _remap_words_to_timing(translated_text, retranscribed_words):
                 'start': retranscribed_words[t_idx].get('start', 0),
                 'end': retranscribed_words[t_next].get('end', 0),
             })
-    # Enforce strict non-overlapping word timings.  The spreading algorithm
-    # above can produce overlapping intervals when there are more translated
-    # words than timing slots (multiple words map to the same or adjacent
-    # slots).  Distribute the total time span evenly across all words so
-    # that caption groups built from consecutive words never overlap.
-    if len(new_words) > 1:
+    # Enforce strict non-overlapping word timings only for the spread case
+    # (more translated words than timing slots).  The 1:1 and merge cases
+    # already produce non-overlapping intervals from Whisper timestamps, so
+    # redistributing them evenly would destroy accurate speech-cadence timing
+    # and make captions less synchronised with the voice.
+    if n_trans > n_timing and len(new_words) > 1:
         total_start = new_words[0]['start']
         total_end = new_words[-1]['end']
         duration = total_end - total_start
@@ -4521,10 +4521,14 @@ def compose_final_video_with_static_blurred_bg(video_clip, audio_clip, caption_s
         except Exception:
             continue
     
+    # Sort captions by start time so the forward clamping pass below works
+    # correctly even when Whisper segments overlap or word groups interleave.
+    caption_data_for_ffmpeg.sort(key=lambda c: c['start'])
+
     # Prevent overlapping captions: clamp each caption's end before next caption's start.
-    # Use a 30ms gap to ensure no frame shows both captions simultaneously,
+    # Use a 40ms gap to ensure no frame shows both captions simultaneously,
     # accounting for ASS centisecond truncation and video frame boundaries.
-    CAPTION_GAP = 0.03
+    CAPTION_GAP = 0.04
     for i in range(len(caption_data_for_ffmpeg) - 1):
         next_start = caption_data_for_ffmpeg[i + 1]['start']
         if caption_data_for_ffmpeg[i]['end'] > next_start - CAPTION_GAP:
