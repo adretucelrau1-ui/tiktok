@@ -2368,8 +2368,28 @@ def _find_and_remove_corrupted_whisper_models(model_name, log=None):
     return removed
 
 def _load_whisper_model_with_retries(model_name="large-v3", tries=3, log=None):
-    import torch    # lazy import — heavy module, only loaded when transcription is needed
-    import whisper  # lazy import — heavy module, only loaded when transcription is needed
+    import sys
+    # Lazy import torch — heavy module. If a previous partial import left a broken
+    # module in sys.modules (e.g. shm.dll blocked → torch._utils missing), remove
+    # it so the next import attempt starts fresh.
+    for _torch_attempt in range(2):
+        try:
+            import torch
+            # Verify the import is functional (catches partial imports)
+            _ = torch.Tensor
+            break
+        except (ImportError, AttributeError, OSError) as _tie:
+            if log: log(f"[whisper] torch import failed (attempt {_torch_attempt+1}/2): {_tie}")
+            # Remove broken partial import from module cache
+            for mod_name in [k for k in sys.modules if k == 'torch' or k.startswith('torch.')]:
+                sys.modules.pop(mod_name, None)
+            if _torch_attempt == 1:
+                raise RuntimeError(f"PyTorch failed to import: {_tie}") from _tie
+    try:
+        import whisper  # lazy import — heavy module, only loaded when transcription is needed
+    except (ImportError, OSError) as _wie:
+        if log: log(f"[whisper] openai-whisper import failed: {_wie}")
+        raise RuntimeError(f"Whisper failed to import: {_wie}") from _wie
     last_exc = None
     
     # Detect GPU availability for Whisper with improved detection
@@ -2457,6 +2477,10 @@ def _load_whisper_model_with_retries(model_name="large-v3", tries=3, log=None):
         except Exception as e:
             last_exc = e
             if log: log(f"[whisper] Unexpected error while loading model '{model_name}': {e}")
+            # If we were on CUDA, also try CPU on next attempt
+            if device == "cuda":
+                if log: log(f"[whisper] Falling back to CPU for next attempt...")
+                device = "cpu"
             time.sleep(0.5 + attempt * 0.5)
             continue
     if last_exc:
@@ -2503,7 +2527,20 @@ def transcribe_captions(voice_path, log=None, translate_to=None):
                 model, device = _get_cached_whisper_model("medium", tries=2, log=log_fn)
             except Exception as e_medium:
                 log_fn(f"[whisper] Failed to load 'medium' model as well: {e_medium}")
-                raise RuntimeError("Whisper models unavailable. Verifică conexiunea la internet și spațiul pe disc.") from e_medium
+                log_fn("[whisper] Falling back to 'small' model...")
+                try:
+                    model, device = _get_cached_whisper_model("small", tries=2, log=log_fn)
+                except Exception as e_small:
+                    log_fn(f"[whisper] Failed to load 'small' model: {e_small}")
+                    log_fn("[whisper] Falling back to 'base' model (last resort)...")
+                    try:
+                        model, device = _get_cached_whisper_model("base", tries=2, log=log_fn)
+                    except Exception as e_base:
+                        log_fn(f"[whisper] Failed to load 'base' model: {e_base}")
+                        raise RuntimeError(
+                            "Whisper models unavailable. Verifică conexiunea la internet și spațiul pe disc. "
+                            "Dacă torch nu se încarcă, reinstalează: pip install torch torchvision torchaudio"
+                        ) from e_base
         
         # Show appropriate message based on actual device being used
         if device == "cuda":
