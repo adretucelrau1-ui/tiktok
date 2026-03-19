@@ -5230,10 +5230,15 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                             # the wrong language, producing source-language text instead of the
                             # target-language translation. Map the original translated text
                             # onto the re-timed segments.
+                            # IMPORTANT: Also clear 'words' (word-level data) because the compose
+                            # function uses words[i]['word'] for caption text when 'words' exists,
+                            # completely ignoring 'text'. Without clearing, untranslated word-level
+                            # data would override the correct translated text in captions.
                             if translated_caption_segments and caption_segments:
                                 if len(caption_segments) == len(translated_caption_segments):
                                     for re_seg, orig_seg in zip(caption_segments, translated_caption_segments):
                                         re_seg['text'] = orig_seg.get('text', re_seg.get('text', ''))
+                                        re_seg.pop('words', None)
                                         if 'original_text' in orig_seg:
                                             re_seg['original_text'] = orig_seg['original_text']
                                     log(f"[AI VOICE] ✓ Mapped translated text to {len(caption_segments)} re-timed segments (1:1)")
@@ -5251,11 +5256,14 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                                         for i, seg in enumerate(caption_segments):
                                             count = base_per_seg + (1 if i < remainder else 0)
                                             seg['text'] = ' '.join(all_translated_words[word_idx:word_idx + count])
+                                            seg.pop('words', None)
                                             word_idx += count
                                         log(f"[AI VOICE] ✓ Distributed {total_words} translated words across {n_segs} re-timed segments")
                             elif translated_caption_segments and not caption_segments:
                                 log("[AI VOICE] ⚠ Re-transcription empty — using original translated segments")
                                 caption_segments = translated_caption_segments
+                                for seg in caption_segments:
+                                    seg.pop('words', None)
                             log("")
                             
                             # Release Whisper model to free GPU memory for NVENC video encoding
@@ -5757,11 +5765,16 @@ def _complete_voice_for_job(submission, job_index, total_jobs, q):
         # but Whisper may auto-detect the wrong language and produce source-language text
         # instead of the target-language text. The caption_segments from _submit_voice_for_job()
         # contain the correct OpenAI/googletrans translated text — map it onto re-timed segments.
+        # IMPORTANT: Also clear 'words' (word-level data) because the compose function uses
+        # words[i]['word'] for caption text when 'words' exists, completely ignoring 'text'.
+        # Without clearing, untranslated word-level data would override the correct translated
+        # text in captions.
         original_translated = submission.get('caption_segments', [])
         if original_translated and final_caption_segments:
             if len(final_caption_segments) == len(original_translated):
                 for re_seg, orig_seg in zip(final_caption_segments, original_translated):
                     re_seg['text'] = orig_seg.get('text', re_seg.get('text', ''))
+                    re_seg.pop('words', None)
                     if 'original_text' in orig_seg:
                         re_seg['original_text'] = orig_seg['original_text']
                 log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Mapped translated text to {len(final_caption_segments)} re-timed segments (1:1)")
@@ -5771,8 +5784,8 @@ def _complete_voice_for_job(submission, job_index, total_jobs, q):
                 # across the re-transcribed timing for correct caption display
                 all_translated_words = []
                 for seg in original_translated:
-                    words = seg.get('text', '').split()
-                    all_translated_words.extend(words)
+                    seg_words = seg.get('text', '').split()
+                    all_translated_words.extend(seg_words)
                 if all_translated_words:
                     total_words = len(all_translated_words)
                     n_segs = len(final_caption_segments)
@@ -5782,12 +5795,15 @@ def _complete_voice_for_job(submission, job_index, total_jobs, q):
                     for i, seg in enumerate(final_caption_segments):
                         count = base_per_seg + (1 if i < remainder else 0)
                         seg['text'] = ' '.join(all_translated_words[word_idx:word_idx + count])
+                        seg.pop('words', None)
                         word_idx += count
                     log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Distributed {total_words} translated words across {n_segs} re-timed segments")
         elif original_translated and not final_caption_segments:
             # Re-transcription produced nothing — fall back to original translated segments
             log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ⚠ Re-transcription empty — using original translated segments")
             final_caption_segments = original_translated
+            for seg in final_caption_segments:
+                seg.pop('words', None)
 
         # Step 4: Get duration and extend last caption
         from moviepy.editor import AudioFileClip as _AudioFileClip
