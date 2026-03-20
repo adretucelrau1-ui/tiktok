@@ -4517,9 +4517,12 @@ def compose_final_video_with_static_blurred_bg(video_clip, audio_clip, caption_s
         except Exception:
             continue
     
-    # Prevent overlapping captions: clamp each caption's end before next caption's start.
+    # Prevent overlapping captions: sort by start time first so that
+    # out-of-order groups from remapped word timing are handled correctly,
+    # then clamp each caption's end before next caption's start.
     # Use a small gap (10ms) to ensure no frame shows both captions simultaneously,
     # even with ASS centisecond truncation or drawtext inclusive-end timing.
+    caption_data_for_ffmpeg.sort(key=lambda c: c['start'])
     for i in range(len(caption_data_for_ffmpeg) - 1):
         next_start = caption_data_for_ffmpeg[i + 1]['start']
         if caption_data_for_ffmpeg[i]['end'] > next_start - 0.01:
@@ -5351,16 +5354,29 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                                 # Map translated text onto re-transcription word timestamps
                                 remapped = _remap_words_to_timing(all_translated_text, all_retrans_words) if all_retrans_words and all_translated_text else None
                                 if remapped:
+                                    # Distribute ALL remapped words proportionally across segments.
+                                    # len(remapped) may differ from sum(seg_word_counts) when the
+                                    # translated text has more/fewer words than re-transcription
+                                    # detected.  Use cumulative proportional mapping so every
+                                    # remapped word is assigned to exactly one segment.
+                                    n_remapped = len(remapped)
+                                    total_wc = sum(seg_word_counts) or 1
+                                    cumulative_wc = 0
                                     w_idx = 0
-                                    for seg, wc in zip(caption_segments, seg_word_counts):
-                                        seg_words = remapped[w_idx:w_idx + wc] if wc > 0 else []
+                                    for i, (seg, wc) in enumerate(zip(caption_segments, seg_word_counts)):
+                                        cumulative_wc += wc
+                                        if i == len(caption_segments) - 1:
+                                            next_w_idx = n_remapped  # last segment gets all remaining
+                                        else:
+                                            next_w_idx = round(cumulative_wc * n_remapped / total_wc)
+                                        seg_words = remapped[w_idx:next_w_idx] if next_w_idx > w_idx else []
                                         if seg_words:
                                             seg['words'] = seg_words
                                             seg['text'] = " ".join(w['word'] for w in seg_words)
                                         else:
                                             seg.pop('words', None)
-                                        w_idx += wc
-                                    log(f"[AI VOICE] ✓ Mapped translated text onto {len(all_retrans_words)} word timestamps across {len(caption_segments)} segments")
+                                        w_idx = next_w_idx
+                                    log(f"[AI VOICE] ✓ Mapped {n_remapped} translated words onto {len(all_retrans_words)} word timestamps across {len(caption_segments)} segments")
                                 else:
                                     # No word-level data — update text only, use segment timing
                                     if len(caption_segments) == len(translated_caption_segments):
@@ -5908,16 +5924,29 @@ def _complete_voice_for_job(submission, job_index, total_jobs, q):
             # Map translated text onto re-transcription word timestamps
             remapped = _remap_words_to_timing(all_translated_text, all_retrans_words) if all_retrans_words and all_translated_text else None
             if remapped:
+                # Distribute ALL remapped words proportionally across segments.
+                # len(remapped) may differ from sum(seg_word_counts) when the
+                # translated text has more/fewer words than re-transcription
+                # detected.  Use cumulative proportional mapping so every
+                # remapped word is assigned to exactly one segment.
+                n_remapped = len(remapped)
+                total_wc = sum(seg_word_counts) or 1
+                cumulative_wc = 0
                 w_idx = 0
-                for seg, wc in zip(final_caption_segments, seg_word_counts):
-                    seg_words = remapped[w_idx:w_idx + wc] if wc > 0 else []
+                for i, (seg, wc) in enumerate(zip(final_caption_segments, seg_word_counts)):
+                    cumulative_wc += wc
+                    if i == len(final_caption_segments) - 1:
+                        next_w_idx = n_remapped  # last segment gets all remaining
+                    else:
+                        next_w_idx = round(cumulative_wc * n_remapped / total_wc)
+                    seg_words = remapped[w_idx:next_w_idx] if next_w_idx > w_idx else []
                     if seg_words:
                         seg['words'] = seg_words
                         seg['text'] = " ".join(w['word'] for w in seg_words)
                     else:
                         seg.pop('words', None)
-                    w_idx += wc
-                log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Mapped translated text onto {len(all_retrans_words)} word timestamps across {len(final_caption_segments)} segments")
+                    w_idx = next_w_idx
+                log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Mapped {n_remapped} translated words onto {len(all_retrans_words)} word timestamps across {len(final_caption_segments)} segments")
             else:
                 # No word-level data — update text only, use segment timing
                 if len(final_caption_segments) == len(original_translated):
