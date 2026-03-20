@@ -4504,6 +4504,13 @@ def compose_final_video_with_static_blurred_bg(video_clip, audio_clip, caption_s
                         "start": grp_start,
                         "end": grp_end
                     })
+                # Chain caption end times: each caption stays visible exactly
+                # until the next word starts being spoken, then transitions
+                # instantly.  Without this, captions linger past their word's
+                # pronunciation (Whisper 'end' often overshoots) and the next
+                # caption appears with a perceived delay.
+                for gi in range(len(groups_with_timing) - 1):
+                    groups_with_timing[gi]["end"] = groups_with_timing[gi + 1]["start"]
             else:
                 words = text.split()
                 groups_with_timing = []
