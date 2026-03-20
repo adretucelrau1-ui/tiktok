@@ -468,6 +468,30 @@ def _remap_words_to_timing(translated_text, retranscribed_words):
     return new_words
 
 
+def _sync_segment_words(segments):
+    """Remap word-level timing data to match translated text.
+
+    After translation, segment['text'] contains the translated text but
+    segment['words'] still carries original-language word tokens (due to
+    the shallow copy in translate_segments).  This function remaps the
+    translated text onto the existing Whisper word timestamps so that
+    compose displays the correct (translated) caption text word-for-word.
+
+    If remapping is not possible (e.g. no word data), the words key is
+    removed so compose falls back to segment-level timing from 'text'.
+    """
+    for seg in segments:
+        words = seg.get('words')
+        translated_text = seg.get('text', '')
+        if words and translated_text and translated_text.strip():
+            remapped = _remap_words_to_timing(translated_text, words)
+            if remapped:
+                seg['words'] = remapped
+            else:
+                seg.pop('words', None)
+    return segments
+
+
 def translate_segments(segments, target_language='en', log=None):
     """
     Translate all caption segments to target language.
@@ -508,6 +532,7 @@ def translate_segments(segments, target_language='en', log=None):
                 new_seg["original_text"] = seg.get("text", "")
                 new_seg["text"] = openai_results[i]
                 translated.append(new_seg)
+            _sync_segment_words(translated)
             if log:
                 log(f"[TRANSLATE] ✓ OpenAI {globals().get('OPENAI_MODEL', 'gpt-4o-mini')} translation complete!")
             return translated
@@ -544,7 +569,7 @@ def translate_segments(segments, target_language='en', log=None):
                     translated.append(new_seg)
                 if log:
                     log("[TRANSLATE] Batch translation complete!")
-                return _reduce_translation_repetition(translated, log=log)
+                return _sync_segment_words(_reduce_translation_repetition(translated, log=log))
             else:
                 if log:
                     log(f"[TRANSLATE] Batch split mismatch ({len(parts)} vs {len(segments)}), falling back to per-segment")
@@ -595,7 +620,7 @@ def translate_segments(segments, target_language='en', log=None):
         else:
             log(f"[TRANSLATE] Translation complete!")
     
-    return _reduce_translation_repetition(translated, log=log)
+    return _sync_segment_words(_reduce_translation_repetition(translated, log=log))
 
 
 def _reduce_translation_repetition(segments, log=None):
