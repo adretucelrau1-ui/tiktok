@@ -4534,7 +4534,7 @@ def compose_final_video_with_static_blurred_bg(video_clip, audio_clip, caption_s
                     # timestamps — inflating short words with MIN_GROUP_DURATION
                     # causes cascading overlap clamping that desynchronises
                     # captions from the voice (especially at 1 word per caption).
-                    g_dur = max(0, group_data["end"] - group_data["start"])
+                    g_dur = max(0.01, group_data["end"] - group_data["start"])
                 else:
                     g_dur = max(MIN_GROUP_DURATION, group_data["end"] - group_data["start"])
                 if g_start >= end_t:
