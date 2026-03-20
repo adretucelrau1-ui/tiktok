@@ -4521,38 +4521,13 @@ def compose_final_video_with_static_blurred_bg(video_clip, audio_clip, caption_s
         except Exception:
             continue
     
-    # Sort captions by start time so the forward clamping pass below works
-    # correctly even when Whisper segments overlap or word groups interleave.
-    caption_data_for_ffmpeg.sort(key=lambda c: c['start'])
-
     # Prevent overlapping captions: clamp each caption's end before next caption's start.
-    # Use a 40ms gap to ensure no frame shows both captions simultaneously,
-    # accounting for ASS centisecond truncation and video frame boundaries.
-    CAPTION_GAP = 0.04
+    # Use a small gap (10ms) to ensure no frame shows both captions simultaneously,
+    # even with ASS centisecond truncation or drawtext inclusive-end timing.
     for i in range(len(caption_data_for_ffmpeg) - 1):
         next_start = caption_data_for_ffmpeg[i + 1]['start']
-        if caption_data_for_ffmpeg[i]['end'] > next_start - CAPTION_GAP:
-            caption_data_for_ffmpeg[i]['end'] = max(
-                caption_data_for_ffmpeg[i]['start'],
-                next_start - CAPTION_GAP,
-            )
-    # Merge captions that ended up with near-zero duration after clamping
-    # into adjacent captions instead of removing them.  This preserves all
-    # spoken text (preventing words from disappearing) while still avoiding
-    # the visual flicker of a sub-frame caption.
-    MIN_VISIBLE_DURATION = 0.05
-    _merged_captions = []
-    for _c in caption_data_for_ffmpeg:
-        if _c['end'] - _c['start'] >= MIN_VISIBLE_DURATION:
-            _merged_captions.append(_c)
-        elif _merged_captions:
-            # Too short — merge text into previous caption and extend its end
-            _merged_captions[-1]['text'] += ' ' + _c['text']
-            _merged_captions[-1]['end'] = max(_merged_captions[-1]['end'], _c['end'])
-        elif _c['text'].strip():
-            # First caption is too short — keep it so text is not lost
-            _merged_captions.append(_c)
-    caption_data_for_ffmpeg = _merged_captions
+        if caption_data_for_ffmpeg[i]['end'] > next_start - 0.01:
+            caption_data_for_ffmpeg[i]['end'] = max(caption_data_for_ffmpeg[i]['start'], next_start - 0.01)
     
     try:
         log(f"[COMPOSE] ═══════════════════════════════════════════════")
