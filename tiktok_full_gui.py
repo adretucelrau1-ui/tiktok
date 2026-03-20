@@ -505,7 +505,6 @@ def translate_segments(segments, target_language='en', log=None):
             translated = []
             for i, seg in enumerate(segments):
                 new_seg = seg.copy()
-                new_seg.pop('words', None)  # Remove untranslated word-level data
                 new_seg["original_text"] = seg.get("text", "")
                 new_seg["text"] = openai_results[i]
                 translated.append(new_seg)
@@ -540,7 +539,6 @@ def translate_segments(segments, target_language='en', log=None):
                 translated = []
                 for i, seg in enumerate(segments):
                     new_seg = seg.copy()
-                    new_seg.pop('words', None)  # Remove untranslated word-level data
                     new_seg["original_text"] = seg.get("text", "")
                     new_seg["text"] = parts[i].strip()
                     translated.append(new_seg)
@@ -566,7 +564,6 @@ def translate_segments(segments, target_language='en', log=None):
             translated_text = translate_text(original_text, target_language, log=None)
             
             new_seg = seg.copy()
-            new_seg.pop('words', None)  # Remove untranslated word-level data
             new_seg["text"] = translated_text
             new_seg["original_text"] = original_text
             translated.append(new_seg)
@@ -588,7 +585,6 @@ def translate_segments(segments, target_language='en', log=None):
                 log(f"[TRANSLATE] ⚠️ {fail_count} consecutive failures — googletrans appears broken, keeping remaining segments untranslated")
             for remaining_seg in segments[i+1:]:
                 new_seg = remaining_seg.copy()
-                new_seg.pop('words', None)  # Remove untranslated word-level data
                 new_seg["original_text"] = remaining_seg.get("text", "")
                 translated.append(new_seg)
             break
