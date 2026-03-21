@@ -5252,7 +5252,11 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                                             count = base_per_seg + (1 if i < remainder else 0)
                                             seg['text'] = ' '.join(all_translated_words[word_idx:word_idx + count])
                                             word_idx += count
-                                        log(f"[AI VOICE] ✓ Distributed {total_words} translated words across {n_segs} re-timed segments")
+                                        # Remove segments that received no translated words — they
+                                        # still contain the original-language Whisper text and would
+                                        # appear as untranslated captions at the end of the video.
+                                        caption_segments = [s for s in caption_segments if s.get('text', '').strip()]
+                                        log(f"[AI VOICE] ✓ Distributed {total_words} translated words across {len(caption_segments)} re-timed segments")
                             elif translated_caption_segments and not caption_segments:
                                 log("[AI VOICE] ⚠ Re-transcription empty — using original translated segments")
                                 caption_segments = translated_caption_segments
@@ -5783,7 +5787,11 @@ def _complete_voice_for_job(submission, job_index, total_jobs, q):
                         count = base_per_seg + (1 if i < remainder else 0)
                         seg['text'] = ' '.join(all_translated_words[word_idx:word_idx + count])
                         word_idx += count
-                    log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Distributed {total_words} translated words across {n_segs} re-timed segments")
+                    # Remove segments that received no translated words — they
+                    # still contain the original-language Whisper text and would
+                    # appear as untranslated captions at the end of the video.
+                    final_caption_segments = [s for s in final_caption_segments if s.get('text', '').strip()]
+                    log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Distributed {total_words} translated words across {len(final_caption_segments)} re-timed segments")
         elif original_translated and not final_caption_segments:
             # Re-transcription produced nothing — fall back to original translated segments
             log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ⚠ Re-transcription empty — using original translated segments")
