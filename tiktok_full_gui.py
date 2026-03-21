@@ -402,72 +402,6 @@ def _openai_translate_segments(segments, target_language='en', log=None):
     return None
 
 
-def _remap_words_to_timing(translated_text, retranscribed_words):
-    """Map translated text onto re-transcription word timestamps.
-
-    When TTS audio is re-transcribed by Whisper, the resulting word
-    timestamps precisely match the TTS speech cadence. This function
-    distributes the (correctly translated) text across those timestamps
-    so that compose can display each caption group at the exact moment
-    the TTS voice speaks the corresponding portion.
-
-    Returns a new list of ``{'word', 'start', 'end'}`` dicts, or *None*
-    if word-level mapping is not possible (empty inputs).
-    """
-    if not retranscribed_words or not translated_text or not translated_text.strip():
-        return None
-    trans_words = translated_text.split()
-    n_trans = len(trans_words)
-    n_timing = len(retranscribed_words)
-    if n_trans == 0 or n_timing == 0:
-        return None
-    new_words = []
-    if n_trans == n_timing:
-        # Perfect 1:1 word count — direct mapping
-        for tw, rw in zip(trans_words, retranscribed_words):
-            new_words.append({'word': tw, 'start': rw.get('start', 0), 'end': rw.get('end', 0)})
-    elif n_trans < n_timing:
-        # Fewer translated words than timing slots — merge adjacent slots
-        ratio = n_timing / n_trans
-        for i in range(n_trans):
-            s_idx = int(i * ratio)
-            e_idx = min(int((i + 1) * ratio) - 1, n_timing - 1)
-            e_idx = max(e_idx, s_idx)
-            new_words.append({
-                'word': trans_words[i],
-                'start': retranscribed_words[s_idx].get('start', 0),
-                'end': retranscribed_words[e_idx].get('end', 0),
-            })
-    else:
-        # More translated words than timing slots — spread across available slots
-        ratio = n_timing / n_trans
-        for i in range(n_trans):
-            t_idx = min(int(i * ratio), n_timing - 1)
-            t_next = min(int((i + 1) * ratio), n_timing - 1)
-            t_next = max(t_next, t_idx)
-            new_words.append({
-                'word': trans_words[i],
-                'start': retranscribed_words[t_idx].get('start', 0),
-                'end': retranscribed_words[t_next].get('end', 0),
-            })
-    # Enforce strict non-overlapping word timings only for the spread case
-    # (more translated words than timing slots).  The 1:1 and merge cases
-    # already produce non-overlapping intervals from Whisper timestamps, so
-    # redistributing them evenly would destroy accurate speech-cadence timing
-    # and make captions less synchronised with the voice.
-    if n_trans > n_timing and len(new_words) > 1:
-        total_start = new_words[0]['start']
-        total_end = new_words[-1]['end']
-        duration = total_end - total_start
-        if duration > 0:
-            n = len(new_words)
-            slot = duration / n
-            for i in range(n):
-                new_words[i]['start'] = total_start + i * slot
-                new_words[i]['end'] = total_start + (i + 1) * slot
-    return new_words
-
-
 def translate_segments(segments, target_language='en', log=None):
     """
     Translate all caption segments to target language.
@@ -2430,29 +2364,8 @@ def _find_and_remove_corrupted_whisper_models(model_name, log=None):
     return removed
 
 def _load_whisper_model_with_retries(model_name="large-v3", tries=3, log=None):
-    import sys
-    # Lazy import torch — heavy module. If a previous partial import left a broken
-    # module in sys.modules (e.g. shm.dll blocked → torch._utils missing), remove
-    # it so the next import attempt starts fresh.
-    for _torch_attempt in range(2):
-        try:
-            import torch
-            # Verify the import is functional (catches partial imports)
-            _ = torch.Tensor
-            break
-        except (ImportError, AttributeError, OSError) as _tie:
-            if log: log(f"[whisper] torch import failed (attempt {_torch_attempt+1}/2): {_tie}")
-            # Remove broken partial import from module cache
-            for mod_name in [k for k in sys.modules if k == 'torch' or k.startswith('torch.')]:
-                sys.modules.pop(mod_name, None)
-            if _torch_attempt == 1:
-                raise RuntimeError(f"PyTorch failed to import: {_tie}") from _tie
-            time.sleep(0.5)  # brief delay before retry to allow transient issues to clear
-    try:
-        import whisper  # lazy import — heavy module, only loaded when transcription is needed
-    except (ImportError, OSError) as _wie:
-        if log: log(f"[whisper] openai-whisper import failed: {_wie}")
-        raise RuntimeError(f"Whisper failed to import: {_wie}") from _wie
+    import torch    # lazy import — heavy module, only loaded when transcription is needed
+    import whisper  # lazy import — heavy module, only loaded when transcription is needed
     last_exc = None
     
     # Detect GPU availability for Whisper with improved detection
@@ -2540,10 +2453,6 @@ def _load_whisper_model_with_retries(model_name="large-v3", tries=3, log=None):
         except Exception as e:
             last_exc = e
             if log: log(f"[whisper] Unexpected error while loading model '{model_name}': {e}")
-            # If we were on CUDA, also try CPU on next attempt
-            if device == "cuda":
-                if log: log(f"[whisper] Falling back to CPU for next attempt...")
-                device = "cpu"
             time.sleep(0.5 + attempt * 0.5)
             continue
     if last_exc:
@@ -2590,20 +2499,7 @@ def transcribe_captions(voice_path, log=None, translate_to=None):
                 model, device = _get_cached_whisper_model("medium", tries=2, log=log_fn)
             except Exception as e_medium:
                 log_fn(f"[whisper] Failed to load 'medium' model as well: {e_medium}")
-                log_fn("[whisper] Falling back to 'small' model...")
-                try:
-                    model, device = _get_cached_whisper_model("small", tries=2, log=log_fn)
-                except Exception as e_small:
-                    log_fn(f"[whisper] Failed to load 'small' model: {e_small}")
-                    log_fn("[whisper] Falling back to 'base' model (last resort)...")
-                    try:
-                        model, device = _get_cached_whisper_model("base", tries=2, log=log_fn)
-                    except Exception as e_base:
-                        log_fn(f"[whisper] Failed to load 'base' model: {e_base}")
-                        raise RuntimeError(
-                            "Whisper models unavailable. Verifică conexiunea la internet și spațiul pe disc. "
-                            "Dacă torch nu se încarcă, reinstalează: pip install torch torchvision torchaudio"
-                        ) from e_base
+                raise RuntimeError("Whisper models unavailable. Verifică conexiunea la internet și spațiul pe disc.") from e_medium
         
         # Show appropriate message based on actual device being used
         if device == "cuda":
@@ -4517,12 +4413,9 @@ def compose_final_video_with_static_blurred_bg(video_clip, audio_clip, caption_s
         except Exception:
             continue
     
-    # Prevent overlapping captions: sort by start time first so that
-    # out-of-order groups from remapped word timing are handled correctly,
-    # then clamp each caption's end before next caption's start.
+    # Prevent overlapping captions: clamp each caption's end before next caption's start.
     # Use a small gap (10ms) to ensure no frame shows both captions simultaneously,
     # even with ASS centisecond truncation or drawtext inclusive-end timing.
-    caption_data_for_ffmpeg.sort(key=lambda c: c['start'])
     for i in range(len(caption_data_for_ffmpeg) - 1):
         next_start = caption_data_for_ffmpeg[i + 1]['start']
         if caption_data_for_ffmpeg[i]['end'] > next_start - 0.01:
@@ -5336,75 +5229,33 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                             # Whisper re-transcription gives perfect timing but may auto-detect
                             # the wrong language, producing source-language text instead of the
                             # target-language translation. Map the original translated text
-                            # onto the re-timed segments.  We keep re-transcription's word-level
-                            # timestamps and remap the translated text onto them so that compose
-                            # can display each caption group at the exact moment the TTS voice
-                            # speaks the corresponding portion.
+                            # onto the re-timed segments.
                             if translated_caption_segments and caption_segments:
-                                # Gather ALL translated text and ALL re-transcription words
-                                all_translated_text = " ".join(
-                                    seg.get('text', '') for seg in translated_caption_segments
-                                ).strip()
-                                all_retrans_words = []
-                                seg_word_counts = []
-                                for seg in caption_segments:
-                                    sw = seg.get('words', [])
-                                    all_retrans_words.extend(sw)
-                                    seg_word_counts.append(len(sw))
-                                # Map translated text onto re-transcription word timestamps
-                                remapped = _remap_words_to_timing(all_translated_text, all_retrans_words) if all_retrans_words and all_translated_text else None
-                                if remapped:
-                                    # Distribute ALL remapped words proportionally across segments.
-                                    # len(remapped) may differ from sum(seg_word_counts) when the
-                                    # translated text has more/fewer words than re-transcription
-                                    # detected.  Use cumulative proportional mapping so every
-                                    # remapped word is assigned to exactly one segment.
-                                    n_remapped = len(remapped)
-                                    total_wc = sum(seg_word_counts) or 1
-                                    cumulative_wc = 0
-                                    w_idx = 0
-                                    for i, (seg, wc) in enumerate(zip(caption_segments, seg_word_counts)):
-                                        cumulative_wc += wc
-                                        if i == len(caption_segments) - 1:
-                                            next_w_idx = n_remapped  # last segment gets all remaining
-                                        else:
-                                            next_w_idx = round(cumulative_wc * n_remapped / total_wc)
-                                        seg_words = remapped[w_idx:next_w_idx] if next_w_idx > w_idx else []
-                                        if seg_words:
-                                            seg['words'] = seg_words
-                                            seg['text'] = " ".join(w['word'] for w in seg_words)
-                                        else:
-                                            seg.pop('words', None)
-                                        w_idx = next_w_idx
-                                    log(f"[AI VOICE] ✓ Mapped {n_remapped} translated words onto {len(all_retrans_words)} word timestamps across {len(caption_segments)} segments")
-                                else:
-                                    # No word-level data — update text only, use segment timing
-                                    if len(caption_segments) == len(translated_caption_segments):
-                                        for re_seg, orig_seg in zip(caption_segments, translated_caption_segments):
-                                            re_seg['text'] = orig_seg.get('text', re_seg.get('text', ''))
-                                            re_seg.pop('words', None)
-                                    else:
-                                        tw = all_translated_text.split()
-                                        n_s = len(caption_segments)
-                                        bps = len(tw) // n_s if n_s else 0
-                                        rem = len(tw) % n_s if n_s else 0
-                                        wi = 0
-                                        for j, seg in enumerate(caption_segments):
-                                            c = bps + (1 if j < rem else 0)
-                                            seg['text'] = ' '.join(tw[wi:wi + c])
-                                            seg.pop('words', None)
-                                            wi += c
-                                    log(f"[AI VOICE] ⚠ No word timestamps — using segment-level timing for {len(caption_segments)} segments")
-                                # Copy original_text where possible
                                 if len(caption_segments) == len(translated_caption_segments):
                                     for re_seg, orig_seg in zip(caption_segments, translated_caption_segments):
+                                        re_seg['text'] = orig_seg.get('text', re_seg.get('text', ''))
                                         if 'original_text' in orig_seg:
                                             re_seg['original_text'] = orig_seg['original_text']
+                                    log(f"[AI VOICE] ✓ Mapped translated text to {len(caption_segments)} re-timed segments (1:1)")
+                                else:
+                                    log(f"[AI VOICE] ⚠ Segment count changed ({len(translated_caption_segments)} → {len(caption_segments)}) — redistributing translated text")
+                                    all_translated_words = []
+                                    for seg in translated_caption_segments:
+                                        all_translated_words.extend(seg.get('text', '').split())
+                                    if all_translated_words:
+                                        total_words = len(all_translated_words)
+                                        n_segs = len(caption_segments)
+                                        base_per_seg = total_words // n_segs
+                                        remainder = total_words % n_segs
+                                        word_idx = 0
+                                        for i, seg in enumerate(caption_segments):
+                                            count = base_per_seg + (1 if i < remainder else 0)
+                                            seg['text'] = ' '.join(all_translated_words[word_idx:word_idx + count])
+                                            word_idx += count
+                                        log(f"[AI VOICE] ✓ Distributed {total_words} translated words across {n_segs} re-timed segments")
                             elif translated_caption_segments and not caption_segments:
                                 log("[AI VOICE] ⚠ Re-transcription empty — using original translated segments")
                                 caption_segments = translated_caption_segments
-                                for seg in caption_segments:
-                                    seg.pop('words', None)
                             log("")
                             
                             # Release Whisper model to free GPU memory for NVENC video encoding
@@ -5906,76 +5757,37 @@ def _complete_voice_for_job(submission, job_index, total_jobs, q):
         # but Whisper may auto-detect the wrong language and produce source-language text
         # instead of the target-language text. The caption_segments from _submit_voice_for_job()
         # contain the correct OpenAI/googletrans translated text — map it onto re-timed segments.
-        # We keep re-transcription's word-level timestamps and remap the translated text onto
-        # them so that compose can display each caption group at the exact moment the TTS voice
-        # speaks the corresponding portion.
         original_translated = submission.get('caption_segments', [])
         if original_translated and final_caption_segments:
-            # Gather ALL translated text and ALL re-transcription words
-            all_translated_text = " ".join(
-                seg.get('text', '') for seg in original_translated
-            ).strip()
-            all_retrans_words = []
-            seg_word_counts = []
-            for seg in final_caption_segments:
-                sw = seg.get('words', [])
-                all_retrans_words.extend(sw)
-                seg_word_counts.append(len(sw))
-            # Map translated text onto re-transcription word timestamps
-            remapped = _remap_words_to_timing(all_translated_text, all_retrans_words) if all_retrans_words and all_translated_text else None
-            if remapped:
-                # Distribute ALL remapped words proportionally across segments.
-                # len(remapped) may differ from sum(seg_word_counts) when the
-                # translated text has more/fewer words than re-transcription
-                # detected.  Use cumulative proportional mapping so every
-                # remapped word is assigned to exactly one segment.
-                n_remapped = len(remapped)
-                total_wc = sum(seg_word_counts) or 1
-                cumulative_wc = 0
-                w_idx = 0
-                for i, (seg, wc) in enumerate(zip(final_caption_segments, seg_word_counts)):
-                    cumulative_wc += wc
-                    if i == len(final_caption_segments) - 1:
-                        next_w_idx = n_remapped  # last segment gets all remaining
-                    else:
-                        next_w_idx = round(cumulative_wc * n_remapped / total_wc)
-                    seg_words = remapped[w_idx:next_w_idx] if next_w_idx > w_idx else []
-                    if seg_words:
-                        seg['words'] = seg_words
-                        seg['text'] = " ".join(w['word'] for w in seg_words)
-                    else:
-                        seg.pop('words', None)
-                    w_idx = next_w_idx
-                log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Mapped {n_remapped} translated words onto {len(all_retrans_words)} word timestamps across {len(final_caption_segments)} segments")
-            else:
-                # No word-level data — update text only, use segment timing
-                if len(final_caption_segments) == len(original_translated):
-                    for re_seg, orig_seg in zip(final_caption_segments, original_translated):
-                        re_seg['text'] = orig_seg.get('text', re_seg.get('text', ''))
-                        re_seg.pop('words', None)
-                else:
-                    tw = all_translated_text.split()
-                    n_s = len(final_caption_segments)
-                    bps = len(tw) // n_s if n_s else 0
-                    rem = len(tw) % n_s if n_s else 0
-                    wi = 0
-                    for j, seg in enumerate(final_caption_segments):
-                        c = bps + (1 if j < rem else 0)
-                        seg['text'] = ' '.join(tw[wi:wi + c])
-                        seg.pop('words', None)
-                        wi += c
-                log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ⚠ No word timestamps — using segment-level timing for {len(final_caption_segments)} segments")
-            # Copy original_text where possible
             if len(final_caption_segments) == len(original_translated):
                 for re_seg, orig_seg in zip(final_caption_segments, original_translated):
+                    re_seg['text'] = orig_seg.get('text', re_seg.get('text', ''))
                     if 'original_text' in orig_seg:
                         re_seg['original_text'] = orig_seg['original_text']
+                log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Mapped translated text to {len(final_caption_segments)} re-timed segments (1:1)")
+            else:
+                log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ⚠ Segment count changed ({len(original_translated)} translated → {len(final_caption_segments)} re-transcribed) — redistributing translated text")
+                # Segment counts differ: merge all translated text and redistribute
+                # across the re-transcribed timing for correct caption display
+                all_translated_words = []
+                for seg in original_translated:
+                    words = seg.get('text', '').split()
+                    all_translated_words.extend(words)
+                if all_translated_words:
+                    total_words = len(all_translated_words)
+                    n_segs = len(final_caption_segments)
+                    base_per_seg = total_words // n_segs
+                    remainder = total_words % n_segs
+                    word_idx = 0
+                    for i, seg in enumerate(final_caption_segments):
+                        count = base_per_seg + (1 if i < remainder else 0)
+                        seg['text'] = ' '.join(all_translated_words[word_idx:word_idx + count])
+                        word_idx += count
+                    log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Distributed {total_words} translated words across {n_segs} re-timed segments")
         elif original_translated and not final_caption_segments:
             # Re-transcription produced nothing — fall back to original translated segments
             log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ⚠ Re-transcription empty — using original translated segments")
             final_caption_segments = original_translated
-            for seg in final_caption_segments:
-                seg.pop('words', None)
 
         # Step 4: Get duration and extend last caption
         from moviepy.editor import AudioFileClip as _AudioFileClip
@@ -6124,48 +5936,34 @@ def queue_worker(jobs, q):
     
     def _submitter():
         """Background thread: submit voices one by one, start completion immediately."""
-        try:
-            for idx in range(total):
-                try:
-                    job = jobs[idx]
-                    
-                    if not job.get("use_ai_voice", False):
-                        # No AI voice — mark as immediately ready
-                        log(f"[QUEUE] Job {idx+1}/{total}: no AI voice — ready immediately")
-                        voice_done_events[idx].set()
-                        any_voice_ready.set()
-                        continue
-                    
-                    log(f"\n[QUEUE] 📤 Submitting voice {idx+1}/{total}...")
-                    sub = _submit_voice_for_job(job, idx + 1, total, q)
-                    
-                    if sub is None:
-                        # Submission failed — mark as ready (will process without pre-gen voice)
-                        voice_done_events[idx].set()
-                        any_voice_ready.set()
-                    else:
-                        # Start completion thread IMMEDIATELY (polls GenAI while we submit next job)
-                        t = threading.Thread(target=_completion_worker, args=(idx, sub))
-                        with completion_threads_lock:
-                            completion_threads.append(t)
-                        t.start()
-                        log(f"[QUEUE] ✓ Job {idx+1} completion thread started — moving to next")
-                except Exception as e:
-                    log(f"[QUEUE] ❌ Unexpected error submitting job {idx+1}: {e}")
-                    voice_done_events[idx].set()
-                    any_voice_ready.set()
+        for idx in range(total):
+            job = jobs[idx]
             
-            log(f"\n[QUEUE] ═══ ALL {total} VOICES SUBMITTED ═══")
-        except Exception as e:
-            log(f"[QUEUE] ❌ Submitter thread error: {e}")
-            # Mark all remaining unset jobs as ready so the main loop doesn't hang
-            for idx in range(total):
-                if not voice_done_events[idx].is_set():
-                    voice_done_events[idx].set()
-                    any_voice_ready.set()
-        finally:
-            # Release Whisper model after all submissions to free GPU memory during voice waiting
-            _release_whisper_model(log=log)
+            if not job.get("use_ai_voice", False):
+                # No AI voice — mark as immediately ready
+                log(f"[QUEUE] Job {idx+1}/{total}: no AI voice — ready immediately")
+                voice_done_events[idx].set()
+                any_voice_ready.set()
+                continue
+            
+            log(f"\n[QUEUE] 📤 Submitting voice {idx+1}/{total}...")
+            sub = _submit_voice_for_job(job, idx + 1, total, q)
+            
+            if sub is None:
+                # Submission failed — mark as ready (will process without pre-gen voice)
+                voice_done_events[idx].set()
+                any_voice_ready.set()
+            else:
+                # Start completion thread IMMEDIATELY (polls GenAI while we submit next job)
+                t = threading.Thread(target=_completion_worker, args=(idx, sub))
+                with completion_threads_lock:
+                    completion_threads.append(t)
+                t.start()
+                log(f"[QUEUE] ✓ Job {idx+1} completion thread started — moving to next")
+        
+        log(f"\n[QUEUE] ═══ ALL {total} VOICES SUBMITTED ═══")
+        # Release Whisper model after all submissions to free GPU memory during voice waiting
+        _release_whisper_model(log=log)
     
     # Start submitter in background — submissions happen while videos process
     submitter_thread = threading.Thread(target=_submitter)
