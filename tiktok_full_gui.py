@@ -5145,17 +5145,26 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                     log(f"[AI VOICE] TTS voice duration: {tts_duration:.2f}s")
                     log(f"[AI VOICE] Keeping TTS voice at original speed (natural sound)")
                     
-                    # Adjust music to match TTS duration
-                    log(f"[AI VOICE] Adjusting music to match TTS duration...")
-                    music_matched = make_music_match_duration(music_clip, tts_duration, log, music_gain=music_gain)
+                    # Decide final duration: match video to voice, or let
+                    # video play at natural speed when it is much longer.
+                    original_video_dur = fg_clip.duration
+                    speed_factor = original_video_dur / tts_duration if tts_duration > 0.01 else 1.0
                     
-                    # Composite ONLY TTS + music
-                    log(f"[AI VOICE] 🎬 Compositing audio tracks (TTS + Music only)...")
-                    mixed_audio = CompositeAudioClip([music_matched, tts_clip.set_start(0)]).set_duration(tts_duration)
-                    
-                    # Adjust VIDEO speed to match TTS duration
-                    log(f"[AI VOICE] 🎬 Adjusting video speed to sync with TTS voice...")
-                    synced_video = adjust_video_speed(fg_clip, tts_duration, log, max_change=2.0)
+                    if speed_factor > 2.0:
+                        # Video is much longer than TTS — keep video at natural speed
+                        final_duration = original_video_dur
+                        log(f"[AI VOICE] Video ({original_video_dur:.2f}s) >> TTS ({tts_duration:.2f}s) — keeping full video")
+                        log(f"[AI VOICE] TTS voice ends at {tts_duration:.2f}s, music continues to {final_duration:.2f}s")
+                        music_matched = make_music_match_duration(music_clip, final_duration, log, music_gain=music_gain)
+                        mixed_audio = CompositeAudioClip([music_matched, tts_clip.set_start(0)]).set_duration(final_duration)
+                        synced_video = fg_clip.set_duration(final_duration)
+                    else:
+                        # Video can be reasonably adjusted — sync to TTS duration
+                        final_duration = tts_duration
+                        log(f"[AI VOICE] Adjusting video speed to match TTS duration...")
+                        music_matched = make_music_match_duration(music_clip, final_duration, log, music_gain=music_gain)
+                        mixed_audio = CompositeAudioClip([music_matched, tts_clip.set_start(0)]).set_duration(final_duration)
+                        synced_video = adjust_video_speed(fg_clip, final_duration, log, max_change=2.0)
                     
                     log("")
                     log("━"*60)
@@ -5285,24 +5294,35 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                             log(f"[AI VOICE] TTS voice duration (after silence removal): {tts_duration:.2f}s")
                             log(f"[AI VOICE] Keeping TTS voice at original speed (natural sound)")
                             
-                            # Adjust music to match TTS duration
-                            log(f"[AI VOICE] Adjusting music to match TTS duration...")
-                            music_matched = make_music_match_duration(music_clip, tts_duration, log, music_gain=music_gain)
+                            # Decide final duration: try to match video to voice,
+                            # but if the video is much longer (would need >2× speed-up)
+                            # just let the video play at its natural speed so the user
+                            # sees the full content.  TTS voice plays for its portion,
+                            # then only music continues for the rest.
+                            original_video_dur = fg_clip.duration
+                            speed_factor = original_video_dur / tts_duration if tts_duration > 0.01 else 1.0
                             
-                            # Composite ONLY TTS + music (no original voice to avoid duplicate audio)
-                            log(f"[AI VOICE] 🎬 Compositing audio tracks (TTS + Music only)...")
-                            mixed_audio = CompositeAudioClip([music_matched, tts_clip.set_start(0)]).set_duration(tts_duration)
-                            
-                            # Adjust VIDEO speed to match TTS duration (slow down or speed up video)
-                            log(f"[AI VOICE] 🎬 Adjusting video speed to sync with TTS voice...")
-                            synced_video = adjust_video_speed(fg_clip, tts_duration, log, max_change=2.0)
+                            if speed_factor > 2.0:
+                                # Video is much longer than TTS — keep video at natural speed
+                                final_duration = original_video_dur
+                                log(f"[AI VOICE] Video ({original_video_dur:.2f}s) >> TTS ({tts_duration:.2f}s) — keeping full video")
+                                log(f"[AI VOICE] TTS voice ends at {tts_duration:.2f}s, music continues to {final_duration:.2f}s")
+                                music_matched = make_music_match_duration(music_clip, final_duration, log, music_gain=music_gain)
+                                mixed_audio = CompositeAudioClip([music_matched, tts_clip.set_start(0)]).set_duration(final_duration)
+                                synced_video = fg_clip.set_duration(final_duration)
+                            else:
+                                # Video can be reasonably adjusted — sync to TTS duration
+                                final_duration = tts_duration
+                                log(f"[AI VOICE] Adjusting video speed to match TTS duration...")
+                                music_matched = make_music_match_duration(music_clip, final_duration, log, music_gain=music_gain)
+                                mixed_audio = CompositeAudioClip([music_matched, tts_clip.set_start(0)]).set_duration(final_duration)
+                                synced_video = adjust_video_speed(fg_clip, final_duration, log, max_change=2.0)
                             
                             log("")
                             log("━"*60)
                             log("[AI VOICE] ✅ VOICE REPLACEMENT SUCCESSFUL!")
                             log("[AI VOICE] Voice plays continuously (silences removed)")
                             log("[AI VOICE] Captions synchronized with word timestamps")
-                            log("[AI VOICE] Video speed adjusted to match AI voice (voice kept at natural speed)")
                             log(f"[AI VOICE] Final audio duration: {mixed_audio.duration:.2f}s")
                             log(f"[AI VOICE] Final video duration: {synced_video.duration:.2f}s")
                             log("━"*60)
@@ -10029,13 +10049,23 @@ class App:
             
             # Load video clip at current time
             from moviepy.editor import VideoFileClip
-            video_clip = VideoFileClip(video_path)
+            video_clip = None
+            try:
+                video_clip = VideoFileClip(video_path)
+            except Exception as ve:
+                print(f"TikTok preview: Cannot open video file — {ve}")
+                return
             
-            # Get frame at current time
-            if current_time > video_clip.duration:
-                current_time = 0.0
-            
-            frame = video_clip.get_frame(current_time)
+            try:
+                # Get frame at current time
+                if current_time > video_clip.duration:
+                    current_time = 0.0
+                
+                frame = video_clip.get_frame(current_time)
+            except Exception as fe:
+                print(f"TikTok preview: Cannot read frame at {current_time:.2f}s — {fe}")
+                video_clip.close()
+                return
             video_clip.close()
             
             # Get crop settings
