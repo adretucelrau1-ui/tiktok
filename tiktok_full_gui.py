@@ -5236,6 +5236,9 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                                         re_seg['text'] = orig_seg.get('text', re_seg.get('text', ''))
                                         if 'original_text' in orig_seg:
                                             re_seg['original_text'] = orig_seg['original_text']
+                                    # Filter out segments with empty translated text (prevents
+                                    # original-language Whisper text from leaking through).
+                                    caption_segments = [s for s in caption_segments if s.get('text', '').strip()]
                                     log(f"[AI VOICE] ✓ Mapped translated text to {len(caption_segments)} re-timed segments (1:1)")
                                 else:
                                     log(f"[AI VOICE] ⚠ Segment count changed ({len(translated_caption_segments)} → {len(caption_segments)}) — redistributing translated text")
@@ -5257,6 +5260,11 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                                         # appear as untranslated captions at the end of the video.
                                         caption_segments = [s for s in caption_segments if s.get('text', '').strip()]
                                         log(f"[AI VOICE] ✓ Distributed {total_words} translated words across {len(caption_segments)} re-timed segments")
+                                    else:
+                                        # All translated text was empty — clear re-transcription
+                                        # segments so no original-language text leaks through.
+                                        log("[AI VOICE] ⚠ No translated words available — clearing re-transcribed segments")
+                                        caption_segments = []
                             elif translated_caption_segments and not caption_segments:
                                 log("[AI VOICE] ⚠ Re-transcription empty — using original translated segments")
                                 caption_segments = translated_caption_segments
@@ -5266,19 +5274,8 @@ def process_single_job(video_path, voice_path, music_path, requested_output_path
                             _release_whisper_model(log=log)
                             
                             # No need for timestamp remapping - captions already match the compressed audio!
-                            
-                            # STEP 2.5: Extend last caption to cover full video duration
-                            # This ensures captions display throughout the entire video
-                            compressed_tts_clip = AudioFileClip(compressed_tts_path)
-                            tts_final_duration = compressed_tts_clip.duration
-                            compressed_tts_clip.close()
-                            
-                            if caption_segments:
-                                last_caption_end = caption_segments[-1].get('end', 0)
-                                if last_caption_end < tts_final_duration:
-                                    # Extend last caption to match video/audio duration
-                                    caption_segments[-1]['end'] = tts_final_duration
-                                    log(f"[AI VOICE] Extended last caption from {last_caption_end:.2f}s to {tts_final_duration:.2f}s (full video duration)")
+                            # Do NOT extend last caption — let the video play silently past
+                            # the last spoken word so no foreign-language text leaks through.
                             
                             # Load the silence-removed TTS audio
                             tts_clip = AudioFileClip(compressed_tts_path).volumex(voice_gain)
@@ -5535,16 +5532,41 @@ def _prepare_voice_for_job(job, job_index, total_jobs, q):
             translate_to=None  # Already translated during TTS generation
         )
         
-        # Step 5.5: Get TTS duration and extend last caption
+        # Step 5.5: Map translated text onto re-transcription segments.
+        # Whisper may auto-detect the wrong language; replace with correct translation.
+        if caption_segments and final_caption_segments:
+            if len(final_caption_segments) == len(caption_segments):
+                for re_seg, orig_seg in zip(final_caption_segments, caption_segments):
+                    re_seg['text'] = orig_seg.get('text', re_seg.get('text', ''))
+                    if 'original_text' in orig_seg:
+                        re_seg['original_text'] = orig_seg['original_text']
+            else:
+                all_translated_words = []
+                for seg in caption_segments:
+                    all_translated_words.extend(seg.get('text', '').split())
+                if all_translated_words:
+                    total_words = len(all_translated_words)
+                    n_segs = len(final_caption_segments)
+                    base_per_seg = total_words // n_segs
+                    remainder = total_words % n_segs
+                    word_idx = 0
+                    for i, seg in enumerate(final_caption_segments):
+                        count = base_per_seg + (1 if i < remainder else 0)
+                        seg['text'] = ' '.join(all_translated_words[word_idx:word_idx + count])
+                        word_idx += count
+                else:
+                    final_caption_segments = []
+            # Filter segments with empty text (prevents original-language leaks)
+            final_caption_segments = [s for s in final_caption_segments if s.get('text', '').strip()]
+        elif caption_segments and not final_caption_segments:
+            final_caption_segments = caption_segments
+        
+        # Get TTS duration (do NOT extend last caption — let video play
+        # silently past the last spoken word so no foreign-language text leaks).
         from moviepy.editor import AudioFileClip as _AudioFileClip
         tts_clip_probe = _AudioFileClip(compressed_tts_path)
         tts_duration = tts_clip_probe.duration
         tts_clip_probe.close()
-        
-        if final_caption_segments:
-            last_caption_end = final_caption_segments[-1].get('end', 0)
-            if last_caption_end < tts_duration:
-                final_caption_segments[-1]['end'] = tts_duration
         
         log(f"[VOICE PREP {job_index}/{total_jobs}] ✅ Voice ready! Duration: {tts_duration:.2f}s, Captions: {len(final_caption_segments)}")
         
@@ -5768,6 +5790,9 @@ def _complete_voice_for_job(submission, job_index, total_jobs, q):
                     re_seg['text'] = orig_seg.get('text', re_seg.get('text', ''))
                     if 'original_text' in orig_seg:
                         re_seg['original_text'] = orig_seg['original_text']
+                # Filter out segments with empty translated text (prevents
+                # original-language Whisper text from leaking through).
+                final_caption_segments = [s for s in final_caption_segments if s.get('text', '').strip()]
                 log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Mapped translated text to {len(final_caption_segments)} re-timed segments (1:1)")
             else:
                 log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ⚠ Segment count changed ({len(original_translated)} translated → {len(final_caption_segments)} re-transcribed) — redistributing translated text")
@@ -5792,21 +5817,22 @@ def _complete_voice_for_job(submission, job_index, total_jobs, q):
                     # appear as untranslated captions at the end of the video.
                     final_caption_segments = [s for s in final_caption_segments if s.get('text', '').strip()]
                     log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✓ Distributed {total_words} translated words across {len(final_caption_segments)} re-timed segments")
+                else:
+                    # All translated text was empty — clear re-transcription
+                    # segments so no original-language text leaks through.
+                    log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ⚠ No translated words available — clearing re-transcribed segments")
+                    final_caption_segments = []
         elif original_translated and not final_caption_segments:
             # Re-transcription produced nothing — fall back to original translated segments
             log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ⚠ Re-transcription empty — using original translated segments")
             final_caption_segments = original_translated
 
-        # Step 4: Get duration and extend last caption
+        # Get TTS duration (do NOT extend last caption — let video play
+        # silently past the last spoken word so no foreign-language text leaks).
         from moviepy.editor import AudioFileClip as _AudioFileClip
         tts_clip_probe = _AudioFileClip(compressed_tts_path)
         tts_duration = tts_clip_probe.duration
         tts_clip_probe.close()
-
-        if final_caption_segments:
-            last_caption_end = final_caption_segments[-1].get('end', 0)
-            if last_caption_end < tts_duration:
-                final_caption_segments[-1]['end'] = tts_duration
 
         log(f"[VOICE COMPLETE {job_index}/{total_jobs}] ✅ Voice ready! Duration: {tts_duration:.2f}s, Captions: {len(final_caption_segments)}")
 
