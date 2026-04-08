@@ -6421,10 +6421,8 @@ class App:
         # focus when clicked.  On some platforms the Canvas can intercept clicks
         # before they reach embedded children.
         def _ensure_entry_focus(event):
-            w = event.widget
-            if isinstance(w, (tk.Entry, ttk.Entry)):
-                w.focus_set()
-        left_canvas.bind_all('<Button-1>', _ensure_entry_focus, add='+')
+            event.widget.focus_set()
+        root.bind_class('TEntry', '<Button-1>', _ensure_entry_focus, add='+')
         
         pw.add(left_container, weight=1)
 
