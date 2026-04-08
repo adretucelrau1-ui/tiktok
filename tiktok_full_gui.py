@@ -6303,7 +6303,10 @@ class App:
                                     relief='flat', bd=0)
                         except Exception:
                             w.config(bg=app_ref.BG_SECONDARY)
-                    elif isinstance(w, _tk.Entry):
+                    elif isinstance(w, _tk.Entry) and not isinstance(w, _ttk.Entry):
+                        # Only style plain tk.Entry — ttk.Entry uses ttk.Style;
+                        # calling .config(relief/bd/highlightthickness) on a ttk
+                        # widget can break focus / text-input on some platforms.
                         try:
                             w.config(bg=app_ref.BG_TERTIARY, fg=app_ref.TEXT_PRIMARY,
                                     insertbackground=app_ref.TEXT_PRIMARY,
@@ -6413,6 +6416,15 @@ class App:
         
         left_canvas.bind('<Enter>', bind_mousewheel)
         left_canvas.bind('<Leave>', unbind_mousewheel)
+
+        # Ensure Entry widgets inside the canvas-embedded frame receive keyboard
+        # focus when clicked.  On some platforms the Canvas can intercept clicks
+        # before they reach embedded children.
+        def _ensure_entry_focus(event):
+            w = event.widget
+            if isinstance(w, (tk.Entry, ttk.Entry)):
+                w.focus_set()
+        left_canvas.bind_all('<Button-1>', _ensure_entry_focus, add='+')
         
         pw.add(left_container, weight=1)
 
@@ -6601,6 +6613,9 @@ class App:
         self.translation_prompt_var = tk.StringVar(value=TRANSLATION_CUSTOM_PROMPT)
         self.translation_prompt_entry = ttk.Entry(prompt_frame, textvariable=self.translation_prompt_var, width=30)
         self.translation_prompt_entry.pack(side="left", fill="x", expand=True)
+        # Auto-apply prompt when user presses Enter or leaves the field
+        self.translation_prompt_entry.bind('<Return>', lambda e: self._apply_translation_prompt())
+        self.translation_prompt_entry.bind('<FocusOut>', lambda e: self._apply_translation_prompt())
         ttk.Button(prompt_frame, text="Set", style='Bordered.TButton', command=self._apply_translation_prompt, width=4).pack(side="left", padx=(4,0))
         row += 1
         prompt_hint = ttk.Label(left_frame, text="  Use {language} for auto target lang", font=('Segoe UI', 7))
